@@ -24,7 +24,6 @@ services:
     environment:
       CHOKIDAR_USEPOLLING: "true"
       WATCHPACK_POLLING: "true"
-      MOCK_CONTROL_CENTER_API_BASE_URL: "http://localhost:7300/api/v1/control-plane"
     ports:
       - "4200:4200"
     volumes:
