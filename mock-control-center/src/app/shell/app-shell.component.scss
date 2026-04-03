@@ -130,6 +130,11 @@
   color: rgba(255, 255, 255, 0.78);
 }
 
+.heartbeat {
+  display: grid;
+  gap: 0.45rem;
+}
+
 .content {
   min-width: 0;
 }

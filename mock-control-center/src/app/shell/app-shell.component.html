@@ -54,6 +54,21 @@
           UConnect environment.
         </p>
       </div>
+
+      <div class="sidebar-card">
+        <span class="eyebrow">Orchestrator link</span>
+        <h2>Local API heartbeat</h2>
+        <p class="muted">
+          The control shell polls the local orchestrator so you can see immediately whether the mock
+          backend is reachable.
+        </p>
+        <div class="heartbeat">
+          <span class="badge" [class.badge--success]="backendState === 'ready'" [class.badge--danger]="backendState === 'down'">
+            {{ backendState === 'ready' ? 'api ready' : backendState === 'down' ? 'api down' : 'checking' }}
+          </span>
+          <small class="muted">{{ backendTimestamp }}</small>
+        </div>
+      </div>
     </aside>
 
     <main class="content">
