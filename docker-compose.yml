@@ -1,13 +1,30 @@
 services:
+  orchestrator:
+    image: node:22-bookworm
+    working_dir: /workspace/orchestrator
+    command: >
+      sh -c "npm install &&
+      npm start"
+    environment:
+      PORT: "7300"
+    ports:
+      - "7300:7300"
+    volumes:
+      - ./orchestrator:/workspace/orchestrator
+      - orchestrator-node-modules:/workspace/orchestrator/node_modules
+
   mock-control-center:
     image: node:22-bookworm
     working_dir: /workspace/mock-control-center
     command: >
       sh -c "npm install &&
       npm start -- --host 0.0.0.0 --port 4200 --poll 2000"
+    depends_on:
+      - orchestrator
     environment:
       CHOKIDAR_USEPOLLING: "true"
       WATCHPACK_POLLING: "true"
+      MOCK_CONTROL_CENTER_API_BASE_URL: "http://localhost:7300/api/v1/control-plane"
     ports:
       - "4200:4200"
     volumes:
@@ -15,4 +32,5 @@ services:
       - mock-control-center-node-modules:/workspace/mock-control-center/node_modules
 
 volumes:
+  orchestrator-node-modules:
   mock-control-center-node-modules:
