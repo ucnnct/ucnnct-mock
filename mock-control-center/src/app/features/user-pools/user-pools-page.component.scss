@@ -1,5 +1,84 @@
-.hero {
-  padding: 1.5rem;
+.hero,
+.pools-panel,
+.fixtures-panel,
+.leases-panel {
+  padding: 1.25rem;
+}
+
+.pool-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.95fr);
+  gap: 1.5rem;
+}
+
+.pool-list,
+.fixture-list,
+.lease-list,
+.side-stack {
+  display: grid;
+  gap: 1rem;
+}
+
+.pool-card,
+.fixture-card,
+.lease-card {
+  display: grid;
+  gap: 0.85rem;
+  padding: 1rem;
+  border-radius: 18px;
+  border: 1px solid rgba(219, 230, 241, 0.95);
+  background: rgba(255, 255, 255, 0.84);
+}
+
+.pool-topline {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.pool-metrics {
   display: grid;
   gap: 0.75rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.pool-metrics div {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.95rem 1rem;
+  border-radius: 16px;
+  background: rgba(240, 247, 252, 0.82);
+  border: 1px solid rgba(219, 230, 241, 0.95);
+}
+
+.pool-metrics strong {
+  font-family: var(--font-display);
+  font-size: 1.1rem;
+}
+
+.pool-metrics span,
+.fixture-metrics span {
+  color: var(--color-secondary-500);
+  font-size: 0.84rem;
+}
+
+.fixture-metrics,
+.tag-row {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 1080px) {
+  .pool-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .pool-topline,
+  .pool-metrics {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
 }

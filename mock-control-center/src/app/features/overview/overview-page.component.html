@@ -1,10 +1,173 @@
 <section class="page-shell">
   <article class="hero panel">
-    <div class="eyebrow">Overview</div>
-    <h2>Control-plane shell is ready</h2>
-    <p class="muted">
-      This route will become the executive view: cluster posture, active runs, architecture flow,
-      scaling hotspots and guard rails.
-    </p>
+    <div class="hero-copy">
+      <span class="eyebrow">Overview</span>
+      <h2>Staging load control, worker posture and scaling hotspots</h2>
+      <p class="muted">
+        This V1 keeps a single realistic user engine and surfaces the control-plane posture in one
+        place before we add the real worker-service and mock-user-service.
+      </p>
+    </div>
+
+    <div class="hero-status">
+      <span class="badge badge--success" *ngIf="store.apiState() === 'ready'">orchestrator synced</span>
+      <span class="badge badge--danger" *ngIf="store.apiState() === 'down'">orchestrator unreachable</span>
+      <span class="badge badge--warning" *ngIf="store.loading()">refreshing snapshot</span>
+      <small class="muted">snapshot {{ store.generatedAt() }}</small>
+    </div>
+  </article>
+
+  <section class="metric-grid">
+    <article class="metric-card">
+      <span class="metric-label">Active runs</span>
+      <div class="metric-value">{{ dashboard().activeRuns }}</div>
+    </article>
+    <article class="metric-card">
+      <span class="metric-label">Live users</span>
+      <div class="metric-value">{{ dashboard().activeUsers }}</div>
+    </article>
+    <article class="metric-card">
+      <span class="metric-label">Open sockets</span>
+      <div class="metric-value">{{ dashboard().openSockets }}</div>
+    </article>
+    <article class="metric-card">
+      <span class="metric-label">Worker pods</span>
+      <div class="metric-value">{{ dashboard().workerPods }}</div>
+    </article>
+    <article class="metric-card">
+      <span class="metric-label">P95 latency</span>
+      <div class="metric-value">{{ dashboard().avgP95LatencyMs }} ms</div>
+    </article>
+    <article class="metric-card">
+      <span class="metric-label">Deployed services</span>
+      <div class="metric-value">{{ dashboard().deployedServices }}</div>
+    </article>
+  </section>
+
+  <section class="overview-grid">
+    <article class="panel architecture-panel">
+      <div class="panel-header">
+        <div>
+          <span class="eyebrow">Architecture flow</span>
+          <h3>One control plane, one behavior engine, one staging target</h3>
+        </div>
+      </div>
+
+      <div class="architecture-list">
+        <article class="architecture-step" *ngFor="let stage of store.architecture()">
+          <div class="step-topline">
+            <span class="badge badge--info">{{ stage.tone }}</span>
+            <strong>{{ stage.title }}</strong>
+          </div>
+          <p class="muted">{{ stage.summary }}</p>
+          <ul class="list-reset bullet-list">
+            <li *ngFor="let bullet of stage.bullets">{{ bullet }}</li>
+          </ul>
+        </article>
+      </div>
+    </article>
+
+    <div class="side-stack">
+      <article class="panel side-panel">
+        <div class="panel-header">
+          <div *ngIf="latestRun() as run; else emptyRunHeader">
+            <span class="eyebrow">Latest run</span>
+            <h3>{{ run.runName }}</h3>
+          </div>
+          <ng-template #emptyRunHeader>
+            <div>
+              <span class="eyebrow">Latest run</span>
+              <h3>No run yet</h3>
+            </div>
+          </ng-template>
+          <ng-container *ngIf="latestRun() as run; else idleBadge">
+            <span
+              class="badge"
+              [class.badge--success]="run.status === 'running' || run.status === 'completed'"
+              [class.badge--warning]="run.status === 'paused'"
+              [class.badge--danger]="run.status === 'failed'"
+            >
+              {{ run.status }}
+            </span>
+          </ng-container>
+          <ng-template #idleBadge>
+            <span class="badge badge--info">idle</span>
+          </ng-template>
+        </div>
+
+        <ng-container *ngIf="latestRun() as run">
+          <div class="run-stats">
+            <div>
+              <strong>{{ run.virtualUsers }}</strong>
+              <span>configured users</span>
+            </div>
+            <div>
+              <strong>{{ run.activeUsers }}</strong>
+              <span>currently active</span>
+            </div>
+            <div>
+              <strong>{{ run.requestsPerSecond }}</strong>
+              <span>req/s</span>
+            </div>
+            <div>
+              <strong>{{ run.messagesPerSecond }}</strong>
+              <span>msg/s</span>
+            </div>
+          </div>
+          <div class="progress-track">
+            <div class="progress-fill" [style.width.%]="run.progressPercent"></div>
+          </div>
+          <small class="muted">{{ run.progressPercent }}% of the planned duration</small>
+        </ng-container>
+      </article>
+
+      <article class="panel side-panel">
+        <div class="panel-header">
+          <div>
+            <span class="eyebrow">Hot services</span>
+            <h3>Top CPU pressure right now</h3>
+          </div>
+        </div>
+
+        <div class="service-list">
+          <article class="service-row" *ngFor="let service of hottestServices()">
+            <div class="service-copy">
+              <strong>{{ service.name }}</strong>
+              <span>{{ service.currentReplicas }} -> {{ service.targetReplicas }} replicas</span>
+            </div>
+            <div class="service-metrics">
+              <span>{{ service.cpuPercent }}% CPU</span>
+              <span>{{ service.memoryPercent }}% RAM</span>
+            </div>
+          </article>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <article class="panel timeline-panel">
+    <div class="panel-header">
+      <div>
+        <span class="eyebrow">Scaling events</span>
+        <h3>Replica moves and pressure changes</h3>
+      </div>
+    </div>
+
+    <div class="timeline">
+      <article class="timeline-item" *ngFor="let event of scalingEvents()">
+        <span
+          class="timeline-severity"
+          [class.timeline-severity--success]="event.severity === 'success'"
+          [class.timeline-severity--warning]="event.severity === 'warning'"
+        ></span>
+        <div>
+          <div class="timeline-topline">
+            <strong>{{ event.serviceName }}</strong>
+            <small class="muted">{{ event.timestamp }}</small>
+          </div>
+          <p class="muted">{{ event.detail }}</p>
+        </div>
+      </article>
+    </div>
   </article>
 </section>

@@ -1,5 +1,128 @@
-.hero {
-  padding: 1.5rem;
+.hero,
+.services-panel,
+.worker-panel,
+.events-panel {
+  padding: 1.25rem;
+}
+
+.service-grid,
+.worker-list,
+.event-list {
+  display: grid;
+  gap: 1rem;
+}
+
+.service-grid {
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.service-card,
+.worker-card {
+  display: grid;
+  gap: 0.9rem;
+  padding: 1rem;
+  border-radius: 18px;
+  border: 1px solid rgba(219, 230, 241, 0.95);
+  background: rgba(255, 255, 255, 0.84);
+}
+
+.service-topline,
+.meter-label,
+.event-topline {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.replica-summary {
   display: grid;
   gap: 0.75rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.metric-value--small {
+  font-size: 1.25rem;
+}
+
+.meter {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.meter-track {
+  overflow: hidden;
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(219, 230, 241, 0.95);
+}
+
+.meter-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(135deg, var(--color-primary-500), var(--color-primary-700));
+}
+
+.meter-track--memory {
+  background: rgba(226, 232, 240, 0.95);
+}
+
+.meter-fill--memory {
+  background: linear-gradient(135deg, #38bdf8, #0f766e);
+}
+
+.service-bottomline,
+.worker-metrics {
+  display: flex;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+  color: var(--color-secondary-500);
+  font-size: 0.84rem;
+}
+
+.sparkline {
+  display: flex;
+  align-items: end;
+  gap: 0.28rem;
+  height: 54px;
+}
+
+.spark {
+  flex: 1 1 0;
+  border-radius: 999px 999px 0 0;
+  background: linear-gradient(180deg, rgba(46, 137, 213, 0.85), rgba(23, 62, 99, 0.95));
+  min-height: 10px;
+}
+
+.scaling-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.9fr);
+  gap: 1.5rem;
+}
+
+.event-row {
+  display: grid;
+  gap: 0.35rem;
+  padding-top: 0.95rem;
+  border-top: 1px solid rgba(219, 230, 241, 0.95);
+}
+
+.event-row:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+@media (max-width: 1080px) {
+  .scaling-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .service-topline,
+  .meter-label,
+  .event-topline,
+  .replica-summary {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
 }

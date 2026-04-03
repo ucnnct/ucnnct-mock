@@ -1,9 +1,157 @@
 <section class="page-shell">
   <article class="hero panel">
-    <div class="eyebrow">Scaling</div>
-    <h2>Scaling telemetry placeholder</h2>
-    <p class="muted">
-      This route will surface HPA posture, replica evolution, worker node pressure and scaling events.
-    </p>
+    <div>
+      <span class="eyebrow">Scaling</span>
+      <h2>Replica movement, HPA posture and worker pod pressure</h2>
+      <p class="muted">
+        This view is the operator console for the staging target. It shows which service is hot, how far
+        the replicas moved, and how much pressure the worker cluster is carrying.
+      </p>
+    </div>
   </article>
+
+  <section class="metric-grid">
+    <article class="metric-card">
+      <span class="metric-label">Services with attention</span>
+      <div class="metric-value">{{ attentionServices().length }}</div>
+    </article>
+    <article class="metric-card">
+      <span class="metric-label">Open sockets</span>
+      <div class="metric-value">{{ store.dashboardStats().openSockets }}</div>
+    </article>
+    <article class="metric-card">
+      <span class="metric-label">Worker pods</span>
+      <div class="metric-value">{{ store.dashboardStats().workerPods }}</div>
+    </article>
+    <article class="metric-card">
+      <span class="metric-label">Hot services</span>
+      <div class="metric-value">{{ store.hottestServices().length }}</div>
+    </article>
+  </section>
+
+  <article class="panel services-panel">
+    <div class="panel-header">
+      <div>
+        <span class="eyebrow">Service scaling</span>
+        <h3>Frontend, gateway, realtime and backend services</h3>
+      </div>
+    </div>
+
+    <div class="service-grid">
+      <article class="service-card" *ngFor="let service of store.services()">
+        <div class="service-topline">
+          <div>
+            <strong>{{ service.name }}</strong>
+            <small class="muted">{{ service.namespace }} • {{ service.focus }}</small>
+          </div>
+          <span
+            class="badge"
+            [class.badge--success]="service.status === 'healthy'"
+            [class.badge--warning]="service.status === 'scaling'"
+            [class.badge--danger]="service.status === 'attention'"
+          >
+            {{ service.hpaState }}
+          </span>
+        </div>
+
+        <div class="replica-summary">
+          <div>
+            <span class="metric-label">Current</span>
+            <div class="metric-value metric-value--small">{{ service.currentReplicas }}</div>
+          </div>
+          <div>
+            <span class="metric-label">Target</span>
+            <div class="metric-value metric-value--small">{{ service.targetReplicas }}</div>
+          </div>
+          <div>
+            <span class="metric-label">Range</span>
+            <div class="metric-value metric-value--small">{{ service.minReplicas }}-{{ service.maxReplicas }}</div>
+          </div>
+        </div>
+
+        <div class="meter">
+          <div class="meter-label">
+            <span>CPU</span>
+            <strong>{{ service.cpuPercent }}%</strong>
+          </div>
+          <div class="meter-track"><div class="meter-fill" [style.width.%]="service.cpuPercent"></div></div>
+        </div>
+
+        <div class="meter">
+          <div class="meter-label">
+            <span>Memory</span>
+            <strong>{{ service.memoryPercent }}%</strong>
+          </div>
+          <div class="meter-track meter-track--memory">
+            <div class="meter-fill meter-fill--memory" [style.width.%]="service.memoryPercent"></div>
+          </div>
+        </div>
+
+        <div class="service-bottomline">
+          <span>{{ service.requestRate }} req/s</span>
+          <span>{{ service.trafficShare }}% traffic share</span>
+        </div>
+
+        <div class="sparkline">
+          <span class="spark" *ngFor="let point of service.series" [style.height.%]="point * 14 + 10"></span>
+        </div>
+      </article>
+    </div>
+  </article>
+
+  <section class="scaling-grid">
+    <article class="panel worker-panel">
+      <div class="panel-header">
+        <div>
+          <span class="eyebrow">Worker cluster</span>
+          <h3>Dedicated execution pods</h3>
+        </div>
+      </div>
+
+      <div class="worker-list">
+        <article class="worker-card" *ngFor="let node of store.workerNodes()">
+          <div class="service-topline">
+            <div>
+              <strong>{{ node.name }}</strong>
+              <small class="muted">{{ node.zone }}</small>
+            </div>
+            <span
+              class="badge"
+              [class.badge--success]="node.status === 'healthy'"
+              [class.badge--warning]="node.status === 'warming'"
+              [class.badge--danger]="node.status === 'saturated'"
+            >
+              {{ node.status }}
+            </span>
+          </div>
+
+          <div class="worker-metrics">
+            <span>{{ node.assignedUsers }} assigned users</span>
+            <span>{{ node.runningWorkers }} running workers</span>
+            <span>{{ node.podCount }} pods</span>
+            <span>{{ node.queueLagMs }} ms queue lag</span>
+          </div>
+        </article>
+      </div>
+    </article>
+
+    <article class="panel events-panel">
+      <div class="panel-header">
+        <div>
+          <span class="eyebrow">Scaling events</span>
+          <h3>Latest changes</h3>
+        </div>
+      </div>
+
+      <div class="event-list">
+        <article class="event-row" *ngFor="let event of store.scalingEvents()">
+          <div class="event-topline">
+            <strong>{{ event.serviceName }}</strong>
+            <small class="muted">{{ event.timestamp }}</small>
+          </div>
+          <p class="muted">{{ event.detail }}</p>
+        </article>
+      </div>
+    </article>
+  </section>
 </section>
