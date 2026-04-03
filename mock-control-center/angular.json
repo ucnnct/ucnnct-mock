@@ -6,7 +6,7 @@
   },
   "newProjectRoot": "projects",
   "projects": {
-    "control-plane-ui": {
+    "mock-control-center": {
       "projectType": "application",
       "schematics": {
         "@schematics/angular:component": {
@@ -61,10 +61,10 @@
           "builder": "@angular/build:dev-server",
           "configurations": {
             "production": {
-              "buildTarget": "control-plane-ui:build:production"
+              "buildTarget": "mock-control-center:build:production"
             },
             "development": {
-              "buildTarget": "control-plane-ui:build:development"
+              "buildTarget": "mock-control-center:build:development"
             }
           },
           "defaultConfiguration": "development"
