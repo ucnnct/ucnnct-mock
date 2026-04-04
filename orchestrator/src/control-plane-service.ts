@@ -102,6 +102,12 @@ type DependencyHealth = {
   generatedAt: string;
 };
 
+type BootstrapRun = {
+  summary: RunSummary;
+  cancelled: boolean;
+  leaseId: string | null;
+};
+
 type ServiceDefinition = {
   id: string;
   name: string;
@@ -124,6 +130,7 @@ type DemandSnapshot = {
 export class ControlPlaneService {
   private readonly workerOrigin = process.env.WORKER_SERVICE_ORIGIN ?? 'http://localhost:7400';
   private readonly mockUserOrigin = process.env.MOCK_USER_SERVICE_ORIGIN ?? 'http://localhost:7500';
+  private readonly bootstrapRuns = new Map<string, BootstrapRun>();
 
   private readonly architecture: ArchitectureStage[] = [
     {
@@ -248,8 +255,22 @@ export class ControlPlaneService {
       );
     }
 
-    const runs = workerAssignments
-      .map((assignment) => this.toRunSummary(assignment))
+    const activeWorkerRunIds = new Set(workerAssignments.map((assignment) => assignment.runId));
+    for (const [runId, bootstrapRun] of this.bootstrapRuns.entries()) {
+      if (
+        activeWorkerRunIds.has(runId) &&
+        (bootstrapRun.summary.status === 'running' || bootstrapRun.summary.status === 'completed')
+      ) {
+        this.bootstrapRuns.delete(runId);
+      }
+    }
+
+    const runs = [
+      ...workerAssignments.map((assignment) => this.toRunSummary(assignment)),
+      ...Array.from(this.bootstrapRuns.values())
+        .map((bootstrapRun) => bootstrapRun.summary)
+        .filter((run) => !activeWorkerRunIds.has(run.id))
+    ]
       .sort((left, right) => right.startedAt.localeCompare(left.startedAt));
     const services = this.buildServices(runs);
     const workerNodes = this.buildWorkerNodes(workerRuntime);
@@ -306,56 +327,15 @@ export class ControlPlaneService {
 
   async startRun(input: RunDraftInput): Promise<RunSummary> {
     const runId = `run-${crypto.randomUUID().slice(0, 8)}`;
+    const summary = this.createBootstrapSummary(runId, input);
+    this.bootstrapRuns.set(runId, {
+      summary,
+      cancelled: false,
+      leaseId: null
+    });
 
-    const lease = await this.httpJson<LeaseResponse>(
-      `${this.mockUserOrigin}/api/v1/mock-users/leases`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          runId,
-          runName: input.runName,
-          environment: input.environment,
-          requestedUsers: input.virtualUsers,
-          weights: input.weights
-        })
-      },
-      300_000
-    );
-
-    try {
-      const assignment = await this.httpJson<WorkerAssignment>(`${this.workerOrigin}/api/v1/worker/assignments`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          runId,
-          assignmentLabel: input.runName,
-          environment: input.environment,
-          virtualUsers: lease.assignedUsers.length || input.virtualUsers,
-          durationSeconds: input.durationSeconds,
-          rampUpSeconds: input.rampUpSeconds,
-          thinkTimeMinMs: input.thinkTimeMinMs,
-          thinkTimeMaxMs: input.thinkTimeMaxMs,
-          initialOnlineRatio: input.initialOnlineRatio,
-          websocketRatio: input.websocketRatio,
-          avgSessionDurationSeconds: input.avgSessionDurationSeconds,
-          reconnectProbability: input.reconnectProbability,
-          weights: input.weights,
-          media: input.media,
-          targetBaseUrl: 'https://staging.uconnect.cc',
-          assignedUsers: lease.assignedUsers
-        })
-      });
-
-      return this.toRunSummary(assignment);
-    } catch (error) {
-      await this.safeJson(
-        `${this.mockUserOrigin}/api/v1/mock-users/runs/${runId}/release`,
-        null,
-        { method: 'POST' }
-      );
-      throw error;
-    }
+    void this.bootstrapRun(runId, input);
+    return summary;
   }
 
   async pauseRun(runId: string): Promise<RunSummary | null> {
@@ -385,6 +365,28 @@ export class ControlPlaneService {
   }
 
   async stopRun(runId: string): Promise<RunSummary | null> {
+    const bootstrapRun = this.bootstrapRuns.get(runId);
+    if (bootstrapRun) {
+      bootstrapRun.cancelled = true;
+      bootstrapRun.summary = {
+        ...bootstrapRun.summary,
+        status: 'completed',
+        progressPercent: 100,
+        updatedAt: new Date().toISOString(),
+        events: [
+          {
+            id: `bootstrap-stop-${crypto.randomUUID().slice(0, 8)}`,
+            timestamp: new Date().toISOString(),
+            severity: 'warning' as const,
+            title: 'Run bootstrap cancelled',
+            detail: 'Provisioning was cancelled before worker assignment dispatch completed.'
+          },
+          ...bootstrapRun.summary.events
+        ].slice(0, 10)
+      };
+      return bootstrapRun.summary;
+    }
+
     const assignment = await this.findAssignmentByRunId(runId);
     if (!assignment) {
       return null;
@@ -408,6 +410,182 @@ export class ControlPlaneService {
       []
     );
     return assignments.find((assignment) => assignment.runId === runId) ?? null;
+  }
+
+  private async bootstrapRun(runId: string, input: RunDraftInput): Promise<void> {
+    let leaseId: string | null = null;
+
+    try {
+      this.updateBootstrapRun(runId, (summary) => ({
+        ...summary,
+        updatedAt: new Date().toISOString(),
+        events: [
+          {
+            id: `bootstrap-start-${crypto.randomUUID().slice(0, 8)}`,
+            timestamp: new Date().toISOString(),
+            severity: 'info' as const,
+            title: 'Provisioning mock users',
+            detail: `Allocating ${input.virtualUsers} staging-backed mock users before worker dispatch.`
+          },
+          ...summary.events
+        ].slice(0, 10)
+      }));
+
+      const lease = await this.httpJson<LeaseResponse>(
+        `${this.mockUserOrigin}/api/v1/mock-users/leases`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            runId,
+            runName: input.runName,
+            environment: input.environment,
+            requestedUsers: input.virtualUsers,
+            weights: input.weights
+          })
+        },
+        900_000
+      );
+
+      leaseId = lease.lease.id;
+      const bootstrapRun = this.bootstrapRuns.get(runId);
+      if (!bootstrapRun) {
+        await this.releaseRunLease(runId);
+        return;
+      }
+
+      bootstrapRun.leaseId = lease.lease.id;
+      if (bootstrapRun.cancelled) {
+        await this.releaseRunLease(runId);
+        return;
+      }
+
+      this.updateBootstrapRun(runId, (summary) => ({
+        ...summary,
+        updatedAt: new Date().toISOString(),
+        events: [
+          {
+            id: `bootstrap-lease-${crypto.randomUUID().slice(0, 8)}`,
+            timestamp: new Date().toISOString(),
+            severity: 'success' as const,
+            title: 'Mock users allocated',
+            detail: `Lease ${lease.lease.id} allocated ${lease.assignedUsers.length} staging users. Dispatching worker assignment.`
+          },
+          ...summary.events
+        ].slice(0, 10)
+      }));
+
+      const assignment = await this.httpJson<WorkerAssignment>(`${this.workerOrigin}/api/v1/worker/assignments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          runId,
+          assignmentLabel: input.runName,
+          environment: input.environment,
+          virtualUsers: lease.assignedUsers.length || input.virtualUsers,
+          durationSeconds: input.durationSeconds,
+          rampUpSeconds: input.rampUpSeconds,
+          thinkTimeMinMs: input.thinkTimeMinMs,
+          thinkTimeMaxMs: input.thinkTimeMaxMs,
+          initialOnlineRatio: input.initialOnlineRatio,
+          websocketRatio: input.websocketRatio,
+          avgSessionDurationSeconds: input.avgSessionDurationSeconds,
+          reconnectProbability: input.reconnectProbability,
+          weights: input.weights,
+          media: input.media,
+          targetBaseUrl: 'https://staging.uconnect.cc',
+          assignedUsers: lease.assignedUsers
+        })
+      });
+
+      this.bootstrapRuns.set(runId, {
+        summary: {
+          ...this.toRunSummary(assignment),
+            events: [
+              {
+                id: `bootstrap-dispatch-${crypto.randomUUID().slice(0, 8)}`,
+                timestamp: new Date().toISOString(),
+                severity: 'success' as const,
+                title: 'Worker assignment dispatched',
+                detail: `Assignment ${assignment.id} is now executing against staging.`
+              },
+            ...this.toRunSummary(assignment).events
+          ].slice(0, 10)
+        },
+        cancelled: false,
+        leaseId
+      });
+    } catch (error) {
+      if (leaseId) {
+        await this.releaseRunLease(runId);
+      }
+
+      this.updateBootstrapRun(runId, (summary) => ({
+        ...summary,
+        status: 'failed',
+        progressPercent: 100,
+        updatedAt: new Date().toISOString(),
+        events: [
+          {
+            id: `bootstrap-fail-${crypto.randomUUID().slice(0, 8)}`,
+            timestamp: new Date().toISOString(),
+            severity: 'warning' as const,
+            title: 'Run bootstrap failed',
+            detail: error instanceof Error ? error.message : 'unknown error'
+          },
+          ...summary.events
+        ].slice(0, 10)
+      }));
+    }
+  }
+
+  private createBootstrapSummary(runId: string, input: RunDraftInput): RunSummary {
+    const timestamp = new Date().toISOString();
+    return {
+      ...input,
+      id: runId,
+      status: 'running',
+      startedAt: timestamp,
+      updatedAt: timestamp,
+      elapsedSeconds: 0,
+      progressPercent: 0,
+      activeUsers: 0,
+      connectedUsers: 0,
+      openSockets: 0,
+      requestsPerSecond: 0,
+      messagesPerSecond: 0,
+      uploadsPerMinute: 0,
+      errorRate: 0,
+      p95LatencyMs: 0,
+      topServices: this.pickTopServices(input.weights),
+      events: [
+        {
+          id: `bootstrap-queued-${crypto.randomUUID().slice(0, 8)}`,
+          timestamp,
+          severity: 'info' as const,
+          title: 'Run accepted',
+          detail: `Run ${input.runName} was accepted and queued for staging user provisioning.`
+        }
+      ],
+      milestoneIndex: 0
+    };
+  }
+
+  private updateBootstrapRun(runId: string, updater: (summary: RunSummary) => RunSummary): void {
+    const bootstrapRun = this.bootstrapRuns.get(runId);
+    if (!bootstrapRun) {
+      return;
+    }
+    bootstrapRun.summary = updater(bootstrapRun.summary);
+    this.bootstrapRuns.set(runId, bootstrapRun);
+  }
+
+  private async releaseRunLease(runId: string): Promise<void> {
+    await this.safeJson(
+      `${this.mockUserOrigin}/api/v1/mock-users/runs/${runId}/release`,
+      null,
+      { method: 'POST' }
+    );
   }
 
   private toRunSummary(assignment: WorkerAssignment): RunSummary {
