@@ -12,7 +12,7 @@
 
   <groupId>cc.uconnect</groupId>
   <artifactId>mock-user-service</artifactId>
-  <version>0.2.0</version>
+  <version>0.2.1</version>
   <name>mock-user-service</name>
   <description>In-memory staging mock user registry for the UConnect control plane.</description>
 
