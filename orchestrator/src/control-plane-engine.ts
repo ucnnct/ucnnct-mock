@@ -84,7 +84,6 @@ export class ControlPlaneEngine {
       total: 720,
       available: 720,
       leased: 0,
-      cohortSize: 120,
       tags: ['balanced', 'browse', 'notifications'],
       notes: 'Default pool for mixed realistic runs.'
     },
@@ -95,7 +94,6 @@ export class ControlPlaneEngine {
       total: 360,
       available: 360,
       leased: 0,
-      cohortSize: 80,
       tags: ['realtime', 'private-message', 'presence'],
       notes: 'Preferred when private conversation loops dominate.'
     },
@@ -106,7 +104,6 @@ export class ControlPlaneEngine {
       total: 300,
       available: 300,
       leased: 0,
-      cohortSize: 60,
       tags: ['groups', 'moderation', 'community'],
       notes: 'Best fit for group resolution and notification stress.'
     },
@@ -117,7 +114,6 @@ export class ControlPlaneEngine {
       total: 160,
       available: 160,
       leased: 0,
-      cohortSize: 40,
       tags: ['media', 'minio', 'attachments'],
       notes: 'Reserved for attachment-heavy conversations.'
     }

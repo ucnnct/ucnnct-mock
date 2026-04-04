@@ -128,7 +128,6 @@ export interface UserPool {
   total: number;
   available: number;
   leased: number;
-  cohortSize: number;
   tags: string[];
   notes: string;
 }

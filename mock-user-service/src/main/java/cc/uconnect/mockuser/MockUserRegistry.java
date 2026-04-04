@@ -53,7 +53,6 @@ public class MockUserRegistry {
               total,
               total - leased,
               leased,
-              pool.cohortSize,
               pool.tags,
               pool.notes
           );
@@ -175,7 +174,6 @@ public class MockUserRegistry {
         "Campus Main Pool",
         "Balanced campus-wide activity with broad social graph coverage.",
         12,
-        8,
         List.of("balanced", "browse", "notifications"),
         "Default pool for mixed realistic runs."
     ));
@@ -184,7 +182,6 @@ public class MockUserRegistry {
         "Realtime Core Pool",
         "Dense private messaging and high websocket occupancy.",
         8,
-        6,
         List.of("realtime", "private-message", "presence"),
         "Preferred when private conversation loops dominate."
     ));
@@ -193,7 +190,6 @@ public class MockUserRegistry {
         "Community Groups Pool",
         "Pre-seeded members for group-heavy sessions and shared channels.",
         8,
-        6,
         List.of("groups", "moderation", "community"),
         "Best fit for group resolution and notification stress."
     ));
@@ -201,7 +197,6 @@ public class MockUserRegistry {
         "attachment-lab",
         "Attachment Lab Pool",
         "Users with media-friendly fixtures and file metadata ready.",
-        4,
         4,
         List.of("media", "minio", "attachments"),
         "Reserved for attachment-heavy conversations."
@@ -320,7 +315,6 @@ public class MockUserRegistry {
       String name,
       String purpose,
       int totalUsers,
-      int cohortSize,
       List<String> tags,
       String notes
   ) {

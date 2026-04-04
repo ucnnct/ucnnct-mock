@@ -44,7 +44,6 @@ record UserPoolSnapshot(
     int total,
     int available,
     int leased,
-    int cohortSize,
     List<String> tags,
     String notes
 ) {
