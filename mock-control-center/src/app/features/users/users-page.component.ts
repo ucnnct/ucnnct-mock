@@ -3,13 +3,14 @@ import { Component, computed, inject } from '@angular/core';
 import { ControlPlaneStore } from '../../core/services/control-plane.store';
 
 @Component({
-  selector: 'app-user-pools-page',
+  selector: 'app-users-page',
   imports: [CommonModule],
-  templateUrl: './user-pools-page.component.html',
-  styleUrl: './user-pools-page.component.scss'
+  templateUrl: './users-page.component.html',
+  styleUrl: './users-page.component.scss'
 })
-export class UserPoolsPageComponent {
+export class UsersPageComponent {
   protected readonly store = inject(ControlPlaneStore);
+  protected readonly userRuntime = computed(() => this.store.userRuntime());
   protected readonly activeLeases = computed(() =>
     this.store.leases().filter((lease) => lease.state === 'active')
   );

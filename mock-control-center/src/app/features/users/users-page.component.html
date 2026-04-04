@@ -1,71 +1,66 @@
 <section class="page-shell">
   <article class="hero panel">
     <div>
-      <span class="eyebrow">User pools</span>
-      <h2>Mock account capacity, behavioral fixtures and lease readiness</h2>
+      <span class="eyebrow">Mock users</span>
+      <h2>Identity capacity, behavioral fixtures and lease readiness</h2>
       <p class="muted">
-        This page reads the live pools, fixtures and lease state served by the Spring
-        mock-user-service through the orchestrator.
+        Each mock user is just a staging identity plus a behavioral engine. The worker-service does
+        not receive static batches or fixed scenarios. It leases generic identities here, then lets
+        the behavior model decide what each user does on the platform.
       </p>
     </div>
   </article>
 
   <section class="metric-grid">
     <article class="metric-card">
-      <span class="metric-label">Pools</span>
-      <div class="metric-value">{{ store.userPools().length }}</div>
+      <span class="metric-label">Total users</span>
+      <div class="metric-value">{{ userRuntime()?.totalUsers ?? 0 }}</div>
+    </article>
+    <article class="metric-card">
+      <span class="metric-label">Available</span>
+      <div class="metric-value">{{ userRuntime()?.availableUsers ?? 0 }}</div>
+    </article>
+    <article class="metric-card">
+      <span class="metric-label">Leased</span>
+      <div class="metric-value">{{ userRuntime()?.leasedUsers ?? 0 }}</div>
     </article>
     <article class="metric-card">
       <span class="metric-label">Active leases</span>
       <div class="metric-value">{{ activeLeases().length }}</div>
     </article>
-    <article class="metric-card">
-      <span class="metric-label">Fixtures</span>
-      <div class="metric-value">{{ store.fixtures().length }}</div>
-    </article>
   </section>
 
-  <section class="pool-grid">
-    <article class="panel pools-panel">
+  <section class="users-grid">
+    <article class="panel capacity-panel">
       <div class="panel-header">
         <div>
-          <span class="eyebrow">Pools</span>
-          <h3>Available vs leased users</h3>
+          <span class="eyebrow">Capacity</span>
+          <h3>Global identity stock for behavioral runs</h3>
         </div>
       </div>
 
-      <div class="pool-list">
-        <article class="pool-card" *ngFor="let pool of store.userPools()">
-          <div class="pool-topline">
-            <div>
-              <strong>{{ pool.name }}</strong>
-              <small class="muted">{{ pool.purpose }}</small>
-            </div>
-            <span class="badge badge--info">behavioral pool</span>
-          </div>
-
-          <div class="pool-metrics">
-            <div>
-              <strong>{{ pool.total }}</strong>
-              <span>total</span>
-            </div>
-            <div>
-              <strong>{{ pool.available }}</strong>
-              <span>available</span>
-            </div>
-            <div>
-              <strong>{{ pool.leased }}</strong>
-              <span>leased</span>
-            </div>
-          </div>
-
-          <div class="tag-row">
-            <span class="badge badge--info" *ngFor="let tag of pool.tags">{{ tag }}</span>
-          </div>
-
-          <p class="muted">{{ pool.notes }}</p>
-        </article>
+      <div class="capacity-card" *ngIf="userRuntime() as runtime; else noRuntime">
+        <div class="capacity-row">
+          <strong>{{ runtime.totalUsers }}</strong>
+          <span>total staging-backed mock identities currently known by the registry</span>
+        </div>
+        <div class="capacity-row">
+          <strong>{{ runtime.availableUsers }}</strong>
+          <span>immediately leasable users for the next run</span>
+        </div>
+        <div class="capacity-row">
+          <strong>{{ runtime.leasedUsers }}</strong>
+          <span>users currently reserved by active runs</span>
+        </div>
+        <div class="capacity-row">
+          <strong>{{ runtime.activeLeases }}</strong>
+          <span>active reservations managed by the orchestrator</span>
+        </div>
       </div>
+
+      <ng-template #noRuntime>
+        <p class="muted">The orchestrator has not returned user capacity yet.</p>
+      </ng-template>
     </article>
 
     <div class="side-stack">
@@ -73,13 +68,13 @@
         <div class="panel-header">
           <div>
             <span class="eyebrow">Fixtures</span>
-            <h3>Data packs ready for worker runs</h3>
+            <h3>Behavioral data packs</h3>
           </div>
         </div>
 
         <div class="fixture-list">
           <article class="fixture-card" *ngFor="let fixture of store.fixtures()">
-            <div class="pool-topline">
+            <div class="topline">
               <div>
                 <strong>{{ fixture.name }}</strong>
                 <small class="muted">{{ fixture.summary }}</small>
@@ -114,10 +109,10 @@
 
         <div class="lease-list">
           <article class="lease-card" *ngFor="let lease of store.leases()">
-            <div class="pool-topline">
+            <div class="topline">
               <div>
                 <strong>{{ lease.runName }}</strong>
-                <small class="muted">{{ lease.poolName }}</small>
+                <small class="muted">run {{ lease.runId }}</small>
               </div>
               <span
                 class="badge"
