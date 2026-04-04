@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import {
   ActionCounters,
+  AssignedMockUserIdentity,
   AssignmentStatus,
   ObjectiveMix,
   SessionObjective,
@@ -12,6 +13,7 @@ import {
   WorkerAssignmentSnapshot,
   WorkerRuntimeSnapshot
 } from './models.js';
+import { LiveTrafficDriver } from './live-traffic.js';
 
 const TICK_MS = 2_000;
 const USER_SNAPSHOT_LIMIT = 18;
@@ -21,6 +23,7 @@ type VirtualUserState = Omit<
   VirtualUserSnapshot,
   'lastActionAt' | 'nextActionAt' | 'sessionStartedAt'
 > & {
+  identity: AssignedMockUserIdentity | null;
   activationOffsetMs: number;
   sessionDeadlineAtMs: number | null;
   sessionStartedAtMs: number | null;
@@ -47,6 +50,11 @@ type WorkerAssignmentRuntime = WorkerAssignmentInput & {
   notificationChecksPerMinute: number;
   errorRate: number;
   p95LatencyMs: number;
+  liveMode: 'simulated' | 'hybrid';
+  liveRequests: number;
+  liveFailures: number;
+  liveLastStatus: number | null;
+  liveLastAtMs: number | null;
   objectiveMix: ObjectiveMix;
   actionCounters: ActionCounters;
   recentEvents: UserActionEvent[];
@@ -70,6 +78,7 @@ type ActionOutcome = {
 
 export class WorkerEngine {
   private assignments: WorkerAssignmentRuntime[] = [];
+  private readonly liveTraffic = new LiveTrafficDriver();
 
   constructor() {
     this.assignments = this.buildSeedAssignments();
@@ -102,7 +111,9 @@ export class WorkerEngine {
         : Math.round(
             runningAssignments.reduce((sum, assignment) => sum + assignment.p95LatencyMs, 0) /
               runningAssignments.length
-          );
+        );
+    const liveRequests = runningAssignments.reduce((sum, assignment) => sum + assignment.liveRequests, 0);
+    const liveFailures = runningAssignments.reduce((sum, assignment) => sum + assignment.liveFailures, 0);
 
     return {
       service: 'worker-service',
@@ -113,7 +124,9 @@ export class WorkerEngine {
       requestsPerSecond,
       messagesPerSecond,
       uploadsPerMinute,
-      avgP95LatencyMs
+      avgP95LatencyMs,
+      liveRequests,
+      liveFailures
     };
   }
 
@@ -141,7 +154,7 @@ export class WorkerEngine {
     runtime.recentEvents.unshift(
       this.makeEvent(
         runtime,
-        `Boot sequence prepared against ${input.targetBaseUrl ?? 'staging ingress'} with ${input.virtualUsers} virtual users.`,
+        `Boot sequence prepared against ${input.targetBaseUrl ?? 'simulated staging ingress'} with ${input.virtualUsers} virtual users.`,
         'login',
         runtime.users[0]?.id ?? 'system',
         runtime.users[0]?.sessionObjective ?? null
@@ -265,6 +278,7 @@ export class WorkerEngine {
     ).length;
     const authenticatedUsers = users.filter((user) => user.authenticated).length;
     const connectedUsers = users.filter((user) => user.connectedToWs).length;
+    const liveAggregate = this.aggregateLiveTraffic(assignment.id, users);
 
     const stepRequestsPerSecond = tickRequestCost.reduce((sum, value) => sum + value, 0) / (TICK_MS / 1_000);
     const stepMessagesPerSecond = tickMessageCount.reduce((sum, value) => sum + value, 0) / (TICK_MS / 1_000);
@@ -293,6 +307,10 @@ export class WorkerEngine {
       ),
       errorRate: this.round(this.smooth(nextAssignment.errorRate, stepErrorRate), 3),
       p95LatencyMs: Math.round(this.smooth(nextAssignment.p95LatencyMs, stepP95LatencyMs, 0.42)),
+      liveRequests: liveAggregate.requests,
+      liveFailures: liveAggregate.failures,
+      liveLastStatus: liveAggregate.lastStatus,
+      liveLastAtMs: liveAggregate.lastActivityAtMs,
       objectiveMix: this.buildObjectiveMix(users)
     };
 
@@ -331,6 +349,11 @@ export class WorkerEngine {
       notificationChecksPerMinute: 0,
       errorRate: 0.004,
       p95LatencyMs: 145,
+      liveMode: input.targetBaseUrl ? 'hybrid' : 'simulated',
+      liveRequests: 0,
+      liveFailures: 0,
+      liveLastStatus: null,
+      liveLastAtMs: null,
       objectiveMix: this.emptyObjectiveMix(),
       actionCounters: this.emptyCounters(),
       recentEvents: [],
@@ -355,6 +378,7 @@ export class WorkerEngine {
 
       return {
         id: `vu-${String(index + 1).padStart(4, '0')}`,
+        identity: input.assignedUsers?.[index] ?? null,
         authenticated: false,
         connectedToWs: false,
         currentPage: 'HOME',
@@ -536,8 +560,9 @@ export class WorkerEngine {
         user.sessionStartedAtMs = now;
         user.sessionDeadlineAtMs = now + this.sampleSessionDurationMs(assignment);
         user.sessionRuns += 1;
+        this.scheduleLiveTraffic(assignment, user, action);
         return {
-          detail: `Logged in and opened a ${user.sessionObjective} session${user.connectedToWs ? ' with websocket' : ' over HTTP only'}.`,
+          detail: `Logged in and opened a ${user.sessionObjective} session${user.connectedToWs ? ' with websocket intent' : ' over HTTP only'}${assignment.targetBaseUrl ? ' using live front traffic.' : '.'}`,
           requestCost,
           messageCount: 0,
           uploadCount: 0,
@@ -548,10 +573,12 @@ export class WorkerEngine {
       }
       case 'open_home':
         user.currentPage = 'HOME';
+        this.scheduleLiveTraffic(assignment, user, action);
         return this.outcome(action, requestCost, latencyMs, 'Navigated back to the home feed.');
       case 'fetch_notifications':
         user.currentPage = user.currentPage === 'HOME' ? 'HOME' : user.currentPage;
         user.pendingNotifications = this.clamp(user.pendingNotifications + this.randomInt(-1, 2), 0, 18);
+        this.scheduleLiveTraffic(assignment, user, action);
         return this.outcome(
           action,
           requestCost,
@@ -564,6 +591,7 @@ export class WorkerEngine {
       case 'open_notifications':
         user.currentPage = 'NOTIFICATIONS';
         user.pendingNotifications = this.clamp(user.pendingNotifications - this.randomInt(0, 2), 0, 18);
+        this.scheduleLiveTraffic(assignment, user, action);
         return this.outcome(
           action,
           requestCost,
@@ -578,6 +606,7 @@ export class WorkerEngine {
         if (Math.random() < 0.12) {
           user.knownFriends += 1;
         }
+        this.scheduleLiveTraffic(assignment, user, action);
         return this.outcome(
           action,
           requestCost,
@@ -588,6 +617,7 @@ export class WorkerEngine {
         user.currentPage = 'CONVERSATION';
         user.currentGroupId = null;
         user.currentConversationId = `dm-${this.randomInt(1, Math.max(user.knownFriends, 2))}`;
+        this.scheduleLiveTraffic(assignment, user, action);
         return this.outcome(
           action,
           requestCost,
@@ -601,6 +631,7 @@ export class WorkerEngine {
         if (Math.random() < 0.34) {
           user.pendingNotifications = Math.min(user.pendingNotifications + 1, 18);
         }
+        this.scheduleLiveTraffic(assignment, user, action);
         return this.outcome(
           action,
           requestCost,
@@ -612,6 +643,7 @@ export class WorkerEngine {
         user.currentPage = 'GROUP';
         user.currentConversationId = null;
         user.currentGroupId = `grp-${this.randomInt(1, Math.max(user.knownGroups, 2))}`;
+        this.scheduleLiveTraffic(assignment, user, action);
         return this.outcome(
           action,
           requestCost,
@@ -623,6 +655,7 @@ export class WorkerEngine {
         user.currentGroupId ??= `grp-${this.randomInt(1, Math.max(user.knownGroups, 2))}`;
         user.sentGroupMessages += 1;
         user.pendingNotifications = Math.min(user.pendingNotifications + this.randomInt(0, 2), 18);
+        this.scheduleLiveTraffic(assignment, user, action);
         return this.outcome(
           action,
           requestCost,
@@ -635,6 +668,7 @@ export class WorkerEngine {
         user.currentConversationId = null;
         user.knownGroups += 1;
         user.currentGroupId = `grp-new-${crypto.randomUUID().slice(0, 5)}`;
+        this.scheduleLiveTraffic(assignment, user, action);
         return this.outcome(
           action,
           requestCost,
@@ -645,6 +679,7 @@ export class WorkerEngine {
         user.currentPage = 'GROUP';
         user.currentGroupId ??= `grp-${this.randomInt(1, Math.max(user.knownGroups, 2))}`;
         user.pendingNotifications = Math.min(user.pendingNotifications + 1, 18);
+        this.scheduleLiveTraffic(assignment, user, action);
         return this.outcome(
           action,
           requestCost,
@@ -654,6 +689,7 @@ export class WorkerEngine {
       case 'prepare_upload':
         user.currentPage = 'MEDIA';
         user.uploadPrepared = true;
+        this.scheduleLiveTraffic(assignment, user, action);
         return this.outcome(
           action,
           requestCost,
@@ -664,6 +700,7 @@ export class WorkerEngine {
         user.uploadPrepared = false;
         user.uploadedFiles += 1;
         user.currentPage = user.currentGroupId ? 'GROUP' : 'CONVERSATION';
+        this.scheduleLiveTraffic(assignment, user, action);
         return this.outcome(
           action,
           requestCost,
@@ -676,6 +713,7 @@ export class WorkerEngine {
         user.currentPage = 'FRIENDS';
         user.knownFriends += 1;
         user.pendingNotifications = this.clamp(user.pendingNotifications - 1, 0, 18);
+        this.scheduleLiveTraffic(assignment, user, action);
         return this.outcome(
           action,
           requestCost,
@@ -696,6 +734,7 @@ export class WorkerEngine {
         user.sessionStartedAtMs = null;
         user.sessionDeadlineAtMs = null;
         user.nextActionAtMs = now + this.sampleOfflineCooldownMs(assignment, user);
+        this.liveTraffic.forget(this.liveSessionKey(assignment.id, user.id));
         return this.outcome(action, requestCost, latencyMs, 'Closed the session and entered offline cooldown.');
       }
     }
@@ -720,6 +759,7 @@ export class WorkerEngine {
       uploadPrepared: false,
       nextActionAtMs: now + 60_000
     }));
+    users.forEach((user) => this.liveTraffic.forget(this.liveSessionKey(assignment.id, user.id)));
 
     return {
       ...assignment,
@@ -757,6 +797,7 @@ export class WorkerEngine {
       createdAt: new Date(createdAtMs).toISOString(),
       updatedAt: new Date(updatedAtMs).toISOString(),
       startedAt: new Date(startedAtMs).toISOString(),
+      liveLastAt: assignment.liveLastAtMs ? new Date(assignment.liveLastAtMs).toISOString() : null,
       users: users.slice(0, USER_SNAPSHOT_LIMIT).map((user) => this.toUserSnapshot(user))
     };
   }
@@ -880,6 +921,56 @@ export class WorkerEngine {
     };
   }
 
+  private aggregateLiveTraffic(assignmentId: string, users: VirtualUserState[]): {
+    requests: number;
+    failures: number;
+    lastStatus: number | null;
+    lastActivityAtMs: number | null;
+  } {
+    return users.reduce(
+      (aggregate, user) => {
+        const stats = this.liveTraffic.getStats(this.liveSessionKey(assignmentId, user.id));
+        const lastActivityAtMs = aggregate.lastActivityAtMs === null
+          ? stats.lastActivityAtMs
+          : Math.max(aggregate.lastActivityAtMs, stats.lastActivityAtMs ?? 0);
+
+        return {
+          requests: aggregate.requests + stats.requests,
+          failures: aggregate.failures + stats.failures,
+          lastStatus: stats.lastStatus ?? aggregate.lastStatus,
+          lastActivityAtMs
+        };
+      },
+      {
+        requests: 0,
+        failures: 0,
+        lastStatus: null as number | null,
+        lastActivityAtMs: null as number | null
+      }
+    );
+  }
+
+  private scheduleLiveTraffic(
+    assignment: Pick<WorkerAssignmentRuntime, 'id' | 'targetBaseUrl'>,
+    user: Pick<VirtualUserState, 'id' | 'connectedToWs'>,
+    action: UserAction
+  ): void {
+    if (!assignment.targetBaseUrl) {
+      return;
+    }
+
+    this.liveTraffic.schedule({
+      sessionKey: this.liveSessionKey(assignment.id, user.id),
+      baseUrl: assignment.targetBaseUrl,
+      action,
+      connectedToWs: user.connectedToWs
+    });
+  }
+
+  private liveSessionKey(assignmentId: string, userId: string): string {
+    return `${assignmentId}:${userId}`;
+  }
+
   private mutateAssignment(
     assignmentId: string,
     mutate: (assignment: WorkerAssignmentRuntime) => WorkerAssignmentRuntime
@@ -921,8 +1012,7 @@ export class WorkerEngine {
           social: 10,
           notificationCheck: 8
         },
-        media: { uploadProbability: 0.09, minFileSizeKb: 64, maxFileSizeKb: 1_024 },
-        targetBaseUrl: 'https://staging.uconnect.cc'
+        media: { uploadProbability: 0.09, minFileSizeKb: 64, maxFileSizeKb: 1_024 }
       },
       {
         id: 'assignment-seed-live',
@@ -955,8 +1045,7 @@ export class WorkerEngine {
             social: 8,
             notificationCheck: 16
           },
-          media: { uploadProbability: 0.18, minFileSizeKb: 128, maxFileSizeKb: 2_048 },
-          targetBaseUrl: 'https://staging-preview.uconnect.cc'
+          media: { uploadProbability: 0.18, minFileSizeKb: 128, maxFileSizeKb: 2_048 }
         },
         {
           id: 'assignment-seed-history',

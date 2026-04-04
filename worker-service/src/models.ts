@@ -49,6 +49,16 @@ export interface MediaProfile {
   maxFileSizeKb: number;
 }
 
+export interface AssignedMockUserIdentity {
+  id: string;
+  username: string;
+  displayName: string;
+  email: string;
+  poolId: string;
+  tags: string[];
+  password?: string | null;
+}
+
 export interface WorkerAssignmentInput {
   runId: string;
   assignmentLabel: string;
@@ -65,6 +75,7 @@ export interface WorkerAssignmentInput {
   weights: BehaviorWeights;
   media: MediaProfile;
   targetBaseUrl?: string;
+  assignedUsers?: AssignedMockUserIdentity[];
 }
 
 export interface UserActionEvent {
@@ -139,6 +150,11 @@ export interface WorkerAssignmentSnapshot extends WorkerAssignmentInput {
   notificationChecksPerMinute: number;
   errorRate: number;
   p95LatencyMs: number;
+  liveMode: 'simulated' | 'hybrid';
+  liveRequests: number;
+  liveFailures: number;
+  liveLastStatus: number | null;
+  liveLastAt: string | null;
   objectiveMix: ObjectiveMix;
   actionCounters: ActionCounters;
   recentEvents: UserActionEvent[];
@@ -155,4 +171,6 @@ export interface WorkerRuntimeSnapshot {
   messagesPerSecond: number;
   uploadsPerMinute: number;
   avgP95LatencyMs: number;
+  liveRequests: number;
+  liveFailures: number;
 }

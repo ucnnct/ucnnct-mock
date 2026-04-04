@@ -34,7 +34,20 @@ const assignmentSchema = z
       minFileSizeKb: z.number().int().min(1).max(10_240),
       maxFileSizeKb: z.number().int().min(1).max(102_400)
     }),
-    targetBaseUrl: z.string().url().optional()
+    targetBaseUrl: z.string().url().optional(),
+    assignedUsers: z
+      .array(
+        z.object({
+          id: z.string().min(1),
+          username: z.string().min(1),
+          displayName: z.string().min(1),
+          email: z.string().email(),
+          poolId: z.string().min(1),
+          tags: z.array(z.string()),
+          password: z.string().min(1).nullable().optional()
+        })
+      )
+      .optional()
   })
   .superRefine((assignment, context) => {
     if (assignment.thinkTimeMaxMs < assignment.thinkTimeMinMs) {
