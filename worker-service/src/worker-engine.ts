@@ -143,7 +143,8 @@ export class WorkerEngine {
         runtime,
         `Boot sequence prepared against ${input.targetBaseUrl ?? 'staging ingress'} with ${input.virtualUsers} virtual users.`,
         'login',
-        runtime.users[0]?.id ?? 'system'
+        runtime.users[0]?.id ?? 'system',
+        runtime.users[0]?.sessionObjective ?? null
       )
     );
 
@@ -244,7 +245,7 @@ export class WorkerEngine {
 
       assignment.actionCounters[action] += 1;
       assignment.recentEvents = [
-        this.makeEvent(assignment, outcome.detail, action, nextUser.id),
+        this.makeEvent(assignment, outcome.detail, action, nextUser.id, nextUser.sessionObjective),
         ...assignment.recentEvents
       ].slice(0, MAX_RECENT_EVENTS);
 
@@ -749,12 +750,14 @@ export class WorkerEngine {
   }
 
   private toSnapshot(assignment: WorkerAssignmentRuntime): WorkerAssignmentSnapshot {
+    const { createdAtMs, updatedAtMs, startedAtMs, users, ...snapshot } = assignment;
+
     return {
-      ...assignment,
-      createdAt: new Date(assignment.createdAtMs).toISOString(),
-      updatedAt: new Date(assignment.updatedAtMs).toISOString(),
-      startedAt: new Date(assignment.startedAtMs).toISOString(),
-      users: assignment.users.slice(0, USER_SNAPSHOT_LIMIT).map((user) => this.toUserSnapshot(user))
+      ...snapshot,
+      createdAt: new Date(createdAtMs).toISOString(),
+      updatedAt: new Date(updatedAtMs).toISOString(),
+      startedAt: new Date(startedAtMs).toISOString(),
+      users: users.slice(0, USER_SNAPSHOT_LIMIT).map((user) => this.toUserSnapshot(user))
     };
   }
 
@@ -784,13 +787,14 @@ export class WorkerEngine {
     assignment: Pick<WorkerAssignmentRuntime, 'id'>,
     detail: string,
     action: UserAction,
-    userId: string
+    userId: string,
+    objective: SessionObjective | null = null
   ): UserActionEvent {
     return {
       id: `worker-event-${crypto.randomUUID().slice(0, 8)}`,
       timestamp: new Date().toISOString(),
       userId,
-      objective: null,
+      objective,
       action,
       detail: `[${assignment.id}] ${detail}`
     };
