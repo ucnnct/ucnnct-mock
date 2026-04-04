@@ -92,6 +92,7 @@ type LeaseResponse = {
     email: string;
     poolId: string;
     tags: string[];
+    password?: string | null;
   }>;
 };
 
@@ -334,7 +335,8 @@ export class ControlPlaneService {
           reconnectProbability: input.reconnectProbability,
           weights: input.weights,
           media: input.media,
-          targetBaseUrl: 'https://staging.uconnect.cc'
+          targetBaseUrl: 'https://staging.uconnect.cc',
+          assignedUsers: lease.assignedUsers
         })
       });
 
