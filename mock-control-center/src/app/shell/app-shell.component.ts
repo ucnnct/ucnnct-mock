@@ -33,6 +33,6 @@ export class AppShellComponent {
     { label: 'Overview', route: '/overview', summary: 'Architecture, live posture and control-plane context.' },
     { label: 'Runs', route: '/runs', summary: 'Compose and start realistic load runs.' },
     { label: 'Scaling', route: '/scaling', summary: 'Read HPA, replicas and worker pressure at a glance.' },
-    { label: 'Users', route: '/users', summary: 'Inspect mock identities, leases and fixtures.' }
+    { label: 'Users', route: '/users', summary: 'Inspect mock identities, lease credentials and fixtures.' }
   ];
 }

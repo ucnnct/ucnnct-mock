@@ -9,6 +9,7 @@ import {
   ControlPlaneSnapshot,
   DashboardStats,
   FixtureProfile,
+  LeaseDetail,
   LeaseRecord,
   MockUserRuntime,
   RunDraftInput,
@@ -31,6 +32,9 @@ export class ControlPlaneStore {
   readonly errorMessage = signal<string | null>(null);
   readonly pendingRunId = signal<string | null>(null);
   readonly snapshot = signal<ControlPlaneSnapshot | null>(null);
+  readonly selectedLeaseId = signal<string | null>(null);
+  readonly selectedLeaseDetail = signal<LeaseDetail | null>(null);
+  readonly leaseDetailLoading = signal(false);
 
   readonly architecture = computed<ArchitectureStage[]>(() => this.snapshot()?.architecture ?? []);
   readonly dashboardStats = computed<DashboardStats>(() => {
@@ -123,6 +127,28 @@ export class ControlPlaneStore {
 
   async stopRun(runId: string): Promise<void> {
     await this.runAction(runId, () => this.api.stopRun(runId));
+  }
+
+  async loadLeaseDetail(leaseId: string): Promise<void> {
+    this.selectedLeaseId.set(leaseId);
+    this.leaseDetailLoading.set(true);
+
+    try {
+      const detail = await firstValueFrom(this.api.leaseDetail(leaseId));
+      this.selectedLeaseDetail.set(detail);
+      this.errorMessage.set(null);
+    } catch (error) {
+      this.selectedLeaseDetail.set(null);
+      this.errorMessage.set(this.describeError(error, 'Unable to load lease credentials'));
+    } finally {
+      this.leaseDetailLoading.set(false);
+    }
+  }
+
+  clearLeaseDetail(): void {
+    this.selectedLeaseId.set(null);
+    this.selectedLeaseDetail.set(null);
+    this.leaseDetailLoading.set(false);
   }
 
   isRunPending(runId: string): boolean {

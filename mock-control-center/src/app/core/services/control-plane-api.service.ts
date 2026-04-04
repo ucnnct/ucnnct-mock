@@ -1,7 +1,7 @@
 import { HttpClient } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { Observable } from 'rxjs';
-import { ControlPlaneSnapshot, RunDraftInput, RunSummary } from '../models/control-plane.models';
+import { ControlPlaneSnapshot, LeaseDetail, RunDraftInput, RunSummary } from '../models/control-plane.models';
 
 const DEFAULT_ORCHESTRATOR_ORIGIN =
   globalThis.location == null
@@ -26,6 +26,10 @@ export class ControlPlaneApiService {
 
   snapshot(): Observable<ControlPlaneSnapshot> {
     return this.http.get<ControlPlaneSnapshot>(this.baseUrl);
+  }
+
+  leaseDetail(leaseId: string): Observable<LeaseDetail> {
+    return this.http.get<LeaseDetail>(`${this.baseUrl}/leases/${leaseId}`);
   }
 
   startRun(payload: RunDraftInput): Observable<RunSummary> {

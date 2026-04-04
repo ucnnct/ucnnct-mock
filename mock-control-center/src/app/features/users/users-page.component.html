@@ -2,7 +2,7 @@
   <article class="hero panel">
     <div>
       <span class="eyebrow">Mock users</span>
-      <h2>Identity capacity, behavioral fixtures and lease readiness</h2>
+      <h2>Identity capacity, credentials and behavioral lease readiness</h2>
       <p class="muted">
         Each mock user is just a staging identity plus a behavioral engine. The worker-service does
         not receive static batches or fixed scenarios. It leases generic identities here, then lets
@@ -126,9 +126,88 @@
               <span>{{ lease.users }} users</span>
               <span>{{ lease.issuedAt }}</span>
             </div>
+            <div class="lease-actions">
+              <button
+                type="button"
+                class="action-button"
+                (click)="openLease(lease.id)"
+                [disabled]="store.leaseDetailLoading() && selectedLeaseId() === lease.id"
+              >
+                {{
+                  store.leaseDetailLoading() && selectedLeaseId() === lease.id
+                    ? 'Chargement...'
+                    : 'Voir les identifiants'
+                }}
+              </button>
+            </div>
           </article>
         </div>
       </article>
     </div>
   </section>
+
+  <article class="panel credentials-panel" *ngIf="leaseDetail() as detail">
+    <div class="panel-header">
+      <div>
+        <span class="eyebrow">Credentials</span>
+        <h3>Lease {{ detail.lease.runName }}</h3>
+      </div>
+      <div class="credentials-actions">
+        <a class="action-link" [href]="stagingAppUrl" target="_blank" rel="noreferrer">Ouvrir staging</a>
+        <button type="button" class="action-button action-button--secondary" (click)="copyLeaseCredentials()">
+          Copier tout
+        </button>
+        <button type="button" class="action-button action-button--ghost" (click)="closeLease()">Fermer</button>
+      </div>
+    </div>
+
+    <div class="credentials-callout">
+      <strong>Connexion métier</strong>
+      <span>
+        Utilise n’importe quel couple <code>username/password</code> ci-dessous sur
+        <a [href]="stagingAppUrl" target="_blank" rel="noreferrer">{{ stagingAppUrl }}</a>.
+      </span>
+    </div>
+
+    <label class="search-field">
+      <span>Filtrer les users de ce lease</span>
+      <input type="text" [(ngModel)]="leaseSearch" placeholder="mock.staging.user.001, email, display name..." />
+    </label>
+
+    <div class="credentials-toolbar">
+      <span>{{ filteredUsers().length }} / {{ detail.assignedUsers.length }} identifiants affichés</span>
+      <span class="muted">format de copie: <code>username:password</code></span>
+    </div>
+
+    <div class="credentials-table-wrap">
+      <table class="credentials-table">
+        <thead>
+          <tr>
+            <th>Username</th>
+            <th>Password</th>
+            <th>Email</th>
+            <th>Display name</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr *ngFor="let user of filteredUsers()">
+            <td><code>{{ user.username }}</code></td>
+            <td><code>{{ user.password ?? 'n/a' }}</code></td>
+            <td>{{ user.email }}</td>
+            <td>{{ user.displayName }}</td>
+            <td class="row-actions">
+              <button
+                type="button"
+                class="action-button action-button--secondary"
+                (click)="copyUserCredential(user.username, user.password)"
+              >
+                Copier
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </article>
 </section>
