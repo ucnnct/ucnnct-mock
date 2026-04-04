@@ -1,0 +1,15 @@
+cc/uconnect/mockuser/LeaseResponse.class
+cc/uconnect/mockuser/MockUserRegistry.class
+cc/uconnect/mockuser/MockUserServiceApplication.class
+cc/uconnect/mockuser/MockUserSummary.class
+cc/uconnect/mockuser/MockUserHealthController.class
+cc/uconnect/mockuser/MockUserRegistry$PoolConfig.class
+cc/uconnect/mockuser/UserPoolSnapshot.class
+cc/uconnect/mockuser/FixtureProfile.class
+cc/uconnect/mockuser/MockUserRegistry$LeaseEntity.class
+cc/uconnect/mockuser/BehaviorWeights.class
+cc/uconnect/mockuser/LeaseSnapshot.class
+cc/uconnect/mockuser/LeaseRequest.class
+cc/uconnect/mockuser/MockUserRuntime.class
+cc/uconnect/mockuser/MockUserController.class
+cc/uconnect/mockuser/MockUserRegistry$MockUserEntity.class

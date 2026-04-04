@@ -44,7 +44,21 @@ services:
       - ./worker-service:/workspace/worker-service
       - worker-service-node-modules:/workspace/worker-service/node_modules
 
+  mock-user-service:
+    image: maven:3.9.9-eclipse-temurin-21
+    working_dir: /workspace/mock-user-service
+    command: >
+      sh -c "mvn -q spring-boot:run"
+    environment:
+      SERVER_PORT: "7500"
+    ports:
+      - "7500:7500"
+    volumes:
+      - ./mock-user-service:/workspace/mock-user-service
+      - mock-user-service-m2:/root/.m2
+
 volumes:
   orchestrator-node-modules:
   mock-control-center-node-modules:
   worker-service-node-modules:
+  mock-user-service-m2:

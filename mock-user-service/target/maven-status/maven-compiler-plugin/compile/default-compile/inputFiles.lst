@@ -1,0 +1,5 @@
+/workspace/mock-user-service/src/main/java/cc/uconnect/mockuser/MockUserContracts.java
+/workspace/mock-user-service/src/main/java/cc/uconnect/mockuser/MockUserController.java
+/workspace/mock-user-service/src/main/java/cc/uconnect/mockuser/MockUserHealthController.java
+/workspace/mock-user-service/src/main/java/cc/uconnect/mockuser/MockUserRegistry.java
+/workspace/mock-user-service/src/main/java/cc/uconnect/mockuser/MockUserServiceApplication.java
