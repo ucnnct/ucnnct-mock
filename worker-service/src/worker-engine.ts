@@ -14,6 +14,7 @@ import {
   WorkerRuntimeSnapshot
 } from './models.js';
 import { LiveTrafficDriver } from './live-traffic.js';
+import { StagingApiDriver } from './staging-api.js';
 
 const TICK_MS = 2_000;
 const USER_SNAPSHOT_LIMIT = 18;
@@ -79,6 +80,7 @@ type ActionOutcome = {
 export class WorkerEngine {
   private assignments: WorkerAssignmentRuntime[] = [];
   private readonly liveTraffic = new LiveTrafficDriver();
+  private readonly stagingApi = new StagingApiDriver();
 
   constructor() {
     this.assignments = this.buildSeedAssignments();
@@ -735,6 +737,7 @@ export class WorkerEngine {
         user.sessionDeadlineAtMs = null;
         user.nextActionAtMs = now + this.sampleOfflineCooldownMs(assignment, user);
         this.liveTraffic.forget(this.liveSessionKey(assignment.id, user.id));
+        this.stagingApi.forget(this.liveSessionKey(assignment.id, user.id));
         return this.outcome(action, requestCost, latencyMs, 'Closed the session and entered offline cooldown.');
       }
     }
@@ -759,7 +762,10 @@ export class WorkerEngine {
       uploadPrepared: false,
       nextActionAtMs: now + 60_000
     }));
-    users.forEach((user) => this.liveTraffic.forget(this.liveSessionKey(assignment.id, user.id)));
+    users.forEach((user) => {
+      this.liveTraffic.forget(this.liveSessionKey(assignment.id, user.id));
+      this.stagingApi.forget(this.liveSessionKey(assignment.id, user.id));
+    });
 
     return {
       ...assignment,
@@ -929,7 +935,14 @@ export class WorkerEngine {
   } {
     return users.reduce(
       (aggregate, user) => {
-        const stats = this.liveTraffic.getStats(this.liveSessionKey(assignmentId, user.id));
+        const shellStats = this.liveTraffic.getStats(this.liveSessionKey(assignmentId, user.id));
+        const businessStats = this.stagingApi.getStats(this.liveSessionKey(assignmentId, user.id));
+        const stats = {
+          requests: shellStats.requests + businessStats.requests,
+          failures: shellStats.failures + businessStats.failures,
+          lastStatus: businessStats.lastStatus ?? shellStats.lastStatus,
+          lastActivityAtMs: Math.max(shellStats.lastActivityAtMs ?? 0, businessStats.lastActivityAtMs ?? 0) || null
+        };
         const lastActivityAtMs = aggregate.lastActivityAtMs === null
           ? stats.lastActivityAtMs
           : Math.max(aggregate.lastActivityAtMs, stats.lastActivityAtMs ?? 0);
@@ -951,8 +964,8 @@ export class WorkerEngine {
   }
 
   private scheduleLiveTraffic(
-    assignment: Pick<WorkerAssignmentRuntime, 'id' | 'targetBaseUrl'>,
-    user: Pick<VirtualUserState, 'id' | 'connectedToWs'>,
+    assignment: Pick<WorkerAssignmentRuntime, 'id' | 'targetBaseUrl' | 'assignedUsers'>,
+    user: Pick<VirtualUserState, 'id' | 'connectedToWs' | 'identity'>,
     action: UserAction
   ): void {
     if (!assignment.targetBaseUrl) {
@@ -964,6 +977,14 @@ export class WorkerEngine {
       baseUrl: assignment.targetBaseUrl,
       action,
       connectedToWs: user.connectedToWs
+    });
+
+    this.stagingApi.schedule({
+      sessionKey: this.liveSessionKey(assignment.id, user.id),
+      baseUrl: assignment.targetBaseUrl,
+      action,
+      identity: user.identity,
+      peerCandidates: (assignment.assignedUsers ?? []).filter((candidate) => candidate.id !== user.identity?.id)
     });
   }
 
@@ -990,7 +1011,8 @@ export class WorkerEngine {
   }
 
   private buildSeedAssignments(): WorkerAssignmentRuntime[] {
-    const runningSeed = this.createAssignmentRuntime(
+    const completedRealtimeSeed = this.finishAssignment(
+      this.createAssignmentRuntime(
       {
         runId: 'run-seed-live',
         assignmentLabel: 'staging-evening-burst',
@@ -1020,6 +1042,9 @@ export class WorkerEngine {
         createdAtMs: Date.now() - 11 * 60_000,
         startedAtMs: Date.now() - 11 * 60_000
       }
+      ),
+      'completed',
+      'Historical mixed-traffic assignment already completed.'
     );
 
     const completedSeed = this.finishAssignment(
@@ -1058,12 +1083,12 @@ export class WorkerEngine {
       'Historical attachment-heavy assignment already completed.'
     );
 
-    runningSeed.recentEvents = [
+    completedRealtimeSeed.recentEvents = [
       this.makeEvent(
-        runningSeed,
-        'Seed assignment bootstrapped with a realistic mixed-user posture.',
-        'login',
-        'vu-0001'
+        completedRealtimeSeed,
+        'Historical mixed-traffic assignment already completed.',
+        'logout',
+        'system'
       )
     ];
     completedSeed.recentEvents = [
@@ -1075,7 +1100,7 @@ export class WorkerEngine {
       )
     ];
 
-    return [runningSeed, completedSeed];
+    return [completedRealtimeSeed, completedSeed];
   }
 
   private requestCostForAction(action: UserAction): number {
