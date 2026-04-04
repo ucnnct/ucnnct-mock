@@ -128,6 +128,7 @@ export interface MockUserRuntime {
   availableUsers: number;
   leasedUsers: number;
   activeLeases: number;
+  defaultPasswordHint: string | null;
   generatedAt: string;
 }
 

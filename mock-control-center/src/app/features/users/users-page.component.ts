@@ -13,6 +13,9 @@ export class UsersPageComponent {
   protected readonly store = inject(ControlPlaneStore);
   protected readonly stagingAppUrl = 'https://staging.uconnect.cc';
   protected readonly userRuntime = computed(() => this.store.userRuntime());
+  protected readonly defaultPasswordHint = computed(
+    () => this.store.userRuntime()?.defaultPasswordHint ?? null
+  );
   protected readonly activeLeases = computed(() =>
     this.store.leases().filter((lease) => lease.state === 'active')
   );
@@ -48,7 +51,8 @@ export class UsersPageComponent {
   }
 
   protected async copyUserCredential(username: string, password: string | null): Promise<void> {
-    const payload = password ? `${username}:${password}` : username;
+    const resolvedPassword = this.resolvePassword(password);
+    const payload = resolvedPassword ? `${username}:${resolvedPassword}` : username;
     await this.copyText(payload);
   }
 
@@ -63,9 +67,17 @@ export class UsersPageComponent {
     }
 
     const payload = detail.assignedUsers
-      .map((user) => `${user.username};${user.password ?? ''};${user.email}`)
+      .map((user) => `${user.username};${this.resolvePassword(user.password) ?? ''};${user.email}`)
       .join('\n');
     await this.copyText(payload);
+  }
+
+  protected displayPassword(password: string | null): string {
+    return this.resolvePassword(password) ?? 'n/a';
+  }
+
+  private resolvePassword(password: string | null): string | null {
+    return password ?? this.defaultPasswordHint();
   }
 
   private async copyText(value: string): Promise<void> {

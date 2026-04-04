@@ -176,6 +176,9 @@
         Utilise n'importe quel couple <code>username/password</code> ci-dessous sur
         <a [href]="stagingAppUrl" target="_blank" rel="noreferrer">{{ stagingAppUrl }}</a>.
       </span>
+      <span *ngIf="defaultPasswordHint() as passwordHint">
+        Mot de passe par défaut staging: <code>{{ passwordHint }}</code>
+      </span>
     </div>
 
     <label class="search-field">
@@ -215,7 +218,7 @@
               </div>
             </td>
             <td><code>{{ user.username }}</code></td>
-            <td><code>{{ user.password ?? 'n/a' }}</code></td>
+            <td><code>{{ displayPassword(user.password) }}</code></td>
             <td>{{ user.email }}</td>
             <td>{{ user.displayName }}</td>
             <td class="row-actions">

@@ -69,6 +69,7 @@ record MockUserRuntime(
     int availableUsers,
     int leasedUsers,
     int activeLeases,
+    String defaultPasswordHint,
     String generatedAt
 ) {
 }

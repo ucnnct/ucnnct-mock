@@ -15,6 +15,7 @@ public class MockUserRegistry {
   private final StagingIdentityProvisioner provisioner;
   private final int initialUserCount;
   private final int expansionBuffer;
+  private final String defaultPasswordHint;
   private final Map<String, MockUserEntity> users = new LinkedHashMap<>();
   private final Map<String, LeaseEntity> leases = new LinkedHashMap<>();
   private final List<FixtureProfile> fixtures = new ArrayList<>();
@@ -23,6 +24,7 @@ public class MockUserRegistry {
     this.provisioner = provisioner;
     this.initialUserCount = environment.getProperty("mock.users.initial-count", Integer.class, 64);
     this.expansionBuffer = environment.getProperty("mock.users.expansion-buffer", Integer.class, 24);
+    this.defaultPasswordHint = environment.getProperty("staging.identity.default-password");
     seedUsers();
     seedFixtures();
   }
@@ -39,6 +41,7 @@ public class MockUserRegistry {
         totalUsers - leasedUsers,
         leasedUsers,
         activeLeases,
+        defaultPasswordHint,
         Instant.now().toString()
     );
   }
