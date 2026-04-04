@@ -24,6 +24,16 @@ type StagingApiInput = {
   action: UserAction;
   identity: AssignedMockUserIdentity | null;
   peerCandidates: AssignedMockUserIdentity[];
+  uploadMode?: 'full' | 'upload-only';
+};
+
+export type StagingApiContext = {
+  selfId: string | null;
+  friendIds: string[];
+  groupIds: string[];
+  currentConversationId: string | null;
+  currentGroupId: string | null;
+  preparedUploadKey: string | null;
 };
 
 type TokenResponse = {
@@ -90,6 +100,29 @@ export class StagingApiDriver {
   forget(sessionKey: string): void {
     this.sessions.delete(sessionKey);
     this.stats.delete(sessionKey);
+  }
+
+  getContext(sessionKey: string): StagingApiContext {
+    const session = this.sessions.get(sessionKey);
+    if (!session) {
+      return {
+        selfId: null,
+        friendIds: [],
+        groupIds: [],
+        currentConversationId: null,
+        currentGroupId: null,
+        preparedUploadKey: null
+      };
+    }
+
+    return {
+      selfId: session.selfId,
+      friendIds: [...session.friendIds],
+      groupIds: [...session.groupIds],
+      currentConversationId: session.currentConversationId,
+      currentGroupId: session.currentGroupId,
+      preparedUploadKey: session.preparedUploadKey
+    };
   }
 
   schedule(input: StagingApiInput): void {
@@ -326,7 +359,12 @@ export class StagingApiDriver {
     });
 
     const objectKey = upload.body.key;
+    session.preparedUploadKey = objectKey ?? session.preparedUploadKey;
     if (!objectKey) {
+      return this.combine([upload]);
+    }
+
+    if (input.uploadMode === 'upload-only') {
       return this.combine([upload]);
     }
 
