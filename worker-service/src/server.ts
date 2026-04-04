@@ -42,8 +42,6 @@ const assignmentSchema = z
           username: z.string().min(1),
           displayName: z.string().min(1),
           email: z.string().email(),
-          poolId: z.string().min(1),
-          tags: z.array(z.string()),
           password: z.string().min(1).nullable().optional()
         })
       )

@@ -71,8 +71,8 @@ app.get('/api/v1/control-plane/workers', async (_req, res) => {
   res.json(await controlPlane.getWorkerNodes());
 });
 
-app.get('/api/v1/control-plane/pools', async (_req, res) => {
-  res.json(await controlPlane.getPools());
+app.get('/api/v1/control-plane/user-runtime', async (_req, res) => {
+  res.json(await controlPlane.getUserRuntime());
 });
 
 app.get('/api/v1/control-plane/fixtures', async (_req, res) => {

@@ -121,15 +121,14 @@ export interface WorkerNode {
   zone: string;
 }
 
-export interface UserPool {
-  id: string;
-  name: string;
-  purpose: string;
-  total: number;
-  available: number;
-  leased: number;
-  tags: string[];
-  notes: string;
+export interface MockUserRuntime {
+  service: string;
+  environment: EnvironmentName;
+  totalUsers: number;
+  availableUsers: number;
+  leasedUsers: number;
+  activeLeases: number;
+  generatedAt: string;
 }
 
 export interface FixtureProfile {
@@ -147,8 +146,6 @@ export interface LeaseRecord {
   id: string;
   runId: string;
   runName: string;
-  poolId: string;
-  poolName: string;
   users: number;
   issuedAt: string;
   state: 'active' | 'released';
@@ -177,7 +174,7 @@ export interface ControlPlaneSnapshot {
   runs: RunSummary[];
   services: ServiceScaling[];
   workerNodes: WorkerNode[];
-  pools: UserPool[];
+  userRuntime: MockUserRuntime | null;
   fixtures: FixtureProfile[];
   leases: LeaseRecord[];
   scalingEvents: ScalingEvent[];

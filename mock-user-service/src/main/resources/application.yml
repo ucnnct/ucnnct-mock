@@ -16,5 +16,10 @@ staging:
     client-id: ${STAGING_IDENTITY_CLIENT_ID:ucnnct-bff}
     client-secret: ${STAGING_IDENTITY_CLIENT_SECRET:}
     target-base-url: ${STAGING_IDENTITY_TARGET_BASE_URL:https://staging.uconnect.cc}
-    username-prefix: ${STAGING_IDENTITY_USERNAME_PREFIX:mock.staging}
+    username-prefix: ${STAGING_IDENTITY_USERNAME_PREFIX:mock.staging.user}
     default-password: ${STAGING_IDENTITY_DEFAULT_PASSWORD:}
+
+mock:
+  users:
+    initial-count: ${MOCK_USERS_INITIAL_COUNT:64}
+    expansion-buffer: ${MOCK_USERS_EXPANSION_BUFFER:24}

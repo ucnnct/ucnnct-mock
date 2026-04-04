@@ -6,12 +6,12 @@ import {
   DashboardStats,
   FixtureProfile,
   LeaseRecord,
+  MockUserRuntime,
   RunDraftInput,
   RunEvent,
   RunSummary,
   ScalingEvent,
   ServiceScaling,
-  UserPool,
   WorkerNode
 } from './models.js';
 
@@ -90,8 +90,6 @@ type LeaseResponse = {
     username: string;
     displayName: string;
     email: string;
-    poolId: string;
-    tags: string[];
     password?: string | null;
   }>;
 };
@@ -133,7 +131,7 @@ export class ControlPlaneService {
       summary: 'Operators compose runs, bias the realistic user engine, and monitor staging in one place.',
       bullets: [
         'Run builder with safe defaults',
-        'Live run, scaling and pool views',
+        'Live run, scaling and user-capacity views',
         'All traffic remains scoped to staging'
       ],
       tone: 'ui'
@@ -145,7 +143,7 @@ export class ControlPlaneService {
       bullets: [
         'Creates run ids and lease requests',
         'Releases mock users when runs complete',
-        'Aggregates worker and pool telemetry'
+        'Aggregates worker and user-capacity telemetry'
       ],
       tone: 'control'
     },
@@ -205,7 +203,7 @@ export class ControlPlaneService {
   }
 
   async getSnapshot(): Promise<ControlPlaneSnapshot> {
-    const [workerRuntime, workerAssignments, pools, fixtures, leases] = await Promise.all([
+    const [workerRuntime, workerAssignments, userRuntime, fixtures, leases] = await Promise.all([
       this.safeJson<WorkerRuntime>(`${this.workerOrigin}/api/v1/worker/runtime`, {
         service: 'worker-service',
         generatedAt: new Date().toISOString(),
@@ -218,7 +216,7 @@ export class ControlPlaneService {
         avgP95LatencyMs: 0
       }),
       this.safeJson<WorkerAssignment[]>(`${this.workerOrigin}/api/v1/worker/assignments`, []),
-      this.safeJson<UserPool[]>(`${this.mockUserOrigin}/api/v1/mock-users/pools`, []),
+      this.safeJson<MockUserRuntime | null>(`${this.mockUserOrigin}/api/v1/mock-users/runtime`, null),
       this.safeJson<FixtureProfile[]>(`${this.mockUserOrigin}/api/v1/mock-users/fixtures`, []),
       this.safeJson<LeaseRecord[]>(`${this.mockUserOrigin}/api/v1/mock-users/leases`, [])
     ]);
@@ -261,7 +259,7 @@ export class ControlPlaneService {
       runs,
       services,
       workerNodes,
-      pools,
+      userRuntime,
       fixtures,
       leases: currentLeases,
       scalingEvents: this.buildScalingEvents(services, runs),
@@ -285,8 +283,8 @@ export class ControlPlaneService {
     return (await this.getSnapshot()).workerNodes;
   }
 
-  async getPools(): Promise<UserPool[]> {
-    return (await this.getSnapshot()).pools;
+  async getUserRuntime(): Promise<MockUserRuntime | null> {
+    return (await this.getSnapshot()).userRuntime;
   }
 
   async getFixtures(): Promise<FixtureProfile[]> {
@@ -304,17 +302,21 @@ export class ControlPlaneService {
   async startRun(input: RunDraftInput): Promise<RunSummary> {
     const runId = `run-${crypto.randomUUID().slice(0, 8)}`;
 
-    const lease = await this.httpJson<LeaseResponse>(`${this.mockUserOrigin}/api/v1/mock-users/leases`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        runId,
-        runName: input.runName,
-        environment: input.environment,
-        requestedUsers: input.virtualUsers,
-        weights: input.weights
-      })
-    });
+    const lease = await this.httpJson<LeaseResponse>(
+      `${this.mockUserOrigin}/api/v1/mock-users/leases`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          runId,
+          runName: input.runName,
+          environment: input.environment,
+          requestedUsers: input.virtualUsers,
+          weights: input.weights
+        })
+      },
+      300_000
+    );
 
     try {
       const assignment = await this.httpJson<WorkerAssignment>(`${this.workerOrigin}/api/v1/worker/assignments`, {
@@ -678,14 +680,14 @@ export class ControlPlaneService {
       .map((entry) => entry.name);
   }
 
-  private async httpJson<T>(url: string, init?: RequestInit): Promise<T> {
+  private async httpJson<T>(url: string, init?: RequestInit, timeoutMs = 10_000): Promise<T> {
     const response = await fetch(url, {
       ...init,
       headers: {
         Accept: 'application/json',
         ...(init?.headers ?? {})
       },
-      signal: AbortSignal.timeout(10_000)
+      signal: AbortSignal.timeout(timeoutMs)
     });
 
     if (!response.ok) {
@@ -696,9 +698,9 @@ export class ControlPlaneService {
     return response.json() as Promise<T>;
   }
 
-  private async safeJson<T>(url: string, fallback: T, init?: RequestInit): Promise<T> {
+  private async safeJson<T>(url: string, fallback: T, init?: RequestInit, timeoutMs = 10_000): Promise<T> {
     try {
-      return await this.httpJson<T>(url, init);
+      return await this.httpJson<T>(url, init, timeoutMs);
     } catch {
       return fallback;
     }

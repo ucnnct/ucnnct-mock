@@ -54,8 +54,6 @@ export interface AssignedMockUserIdentity {
   username: string;
   displayName: string;
   email: string;
-  poolId: string;
-  tags: string[];
   password?: string | null;
 }
 

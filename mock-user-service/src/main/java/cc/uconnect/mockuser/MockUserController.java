@@ -26,11 +26,6 @@ public class MockUserController {
     return registry.runtime();
   }
 
-  @GetMapping("/pools")
-  public Object pools() {
-    return registry.pools();
-  }
-
   @GetMapping("/fixtures")
   public Object fixtures() {
     return registry.fixtures();

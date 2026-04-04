@@ -38,36 +38,35 @@ public class StagingIdentityProvisioner {
     return environment.getProperty("staging.identity.provision-enabled", Boolean.class, false);
   }
 
-  public List<ProvisionedMockUser> provision(List<PoolSeedRequest> pools) {
+  public List<ProvisionedMockUser> provisionRange(int fromIndex, int toIndex) {
     if (!isEnabled()) {
       return List.of();
     }
+    if (toIndex < fromIndex) {
+      return List.of();
+    }
 
-    String adminToken = fetchAdminToken();
     String defaultPassword = required("staging.identity.default-password");
     List<ProvisionedMockUser> provisionedUsers = new ArrayList<>();
 
-    for (PoolSeedRequest pool : pools) {
-      for (int index = 1; index <= pool.totalUsers(); index += 1) {
-        String username = buildUsername(pool.id(), index);
-        String email = username + "@mock.uconnect.cc";
-        String displayName = buildDisplayName(pool.id(), index);
+    for (int index = fromIndex; index <= toIndex; index += 1) {
+      String adminToken = fetchAdminToken();
+      String username = buildUsername(index);
+      String email = username + "@mock.uconnect.cc";
+      String displayName = buildDisplayName(index);
 
-        String userId = ensureUser(adminToken, username, email, displayName);
-        ensurePassword(adminToken, userId, defaultPassword);
-        String accessToken = fetchUserToken(username, defaultPassword);
-        waitForBusinessProfile(accessToken, userId);
+      String userId = ensureUser(adminToken, username, email, displayName);
+      ensurePassword(adminToken, userId, defaultPassword);
+      String accessToken = fetchUserToken(username, defaultPassword);
+      waitForBusinessProfile(accessToken, userId);
 
-        provisionedUsers.add(new ProvisionedMockUser(
-            userId,
-            username,
-            displayName,
-            email,
-            pool.id(),
-            pool.tags(),
-            defaultPassword
-        ));
-      }
+      provisionedUsers.add(new ProvisionedMockUser(
+          userId,
+          username,
+          displayName,
+          email,
+          defaultPassword
+      ));
     }
 
     log.info("Provisioned {} staging-backed mock identities", provisionedUsers.size());
@@ -289,19 +288,13 @@ public class StagingIdentityProvisioner {
     return required("staging.identity.realm");
   }
 
-  private String buildUsername(String poolId, int index) {
-    String prefix = environment.getProperty("staging.identity.username-prefix", "mock.staging");
-    return prefix + "." + poolId.replace('-', '.') + "." + String.format("%03d", index);
+  private String buildUsername(int index) {
+    String prefix = environment.getProperty("staging.identity.username-prefix", "mock.staging.user");
+    return prefix + "." + String.format("%03d", index);
   }
 
-  private String buildDisplayName(String poolId, int index) {
-    String label = switch (poolId) {
-      case "realtime-core" -> "Realtime";
-      case "community-groups" -> "Community";
-      case "attachment-lab" -> "Attachment";
-      default -> "Campus";
-    };
-    return label + " Mock " + index;
+  private String buildDisplayName(int index) {
+    return "Mock User " + index;
   }
 
   private String[] splitDisplayName(String displayName) {
@@ -339,20 +332,11 @@ public class StagingIdentityProvisioner {
   }
 }
 
-record PoolSeedRequest(
-    String id,
-    int totalUsers,
-    List<String> tags
-) {
-}
-
 record ProvisionedMockUser(
     String id,
     String username,
     String displayName,
     String email,
-    String poolId,
-    List<String> tags,
     String password
 ) {
 }

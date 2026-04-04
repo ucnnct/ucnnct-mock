@@ -16,36 +16,12 @@ record BehaviorWeights(
 ) {
 }
 
-record MockUserSummary(
-    String id,
-    String username,
-    String displayName,
-    String email,
-    String poolId,
-    List<String> tags
-) {
-}
-
 record LeasedMockUser(
     String id,
     String username,
     String displayName,
     String email,
-    String poolId,
-    List<String> tags,
     String password
-) {
-}
-
-record UserPoolSnapshot(
-    String id,
-    String name,
-    String purpose,
-    int total,
-    int available,
-    int leased,
-    List<String> tags,
-    String notes
 ) {
 }
 
@@ -74,8 +50,6 @@ record LeaseSnapshot(
     String id,
     String runId,
     String runName,
-    String poolId,
-    String poolName,
     int users,
     String issuedAt,
     String state

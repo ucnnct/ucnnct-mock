@@ -1,5 +1,6 @@
 import { DestroyRef, Injectable, computed, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { HttpErrorResponse } from '@angular/common/http';
 import { EMPTY, firstValueFrom, interval } from 'rxjs';
 import { catchError, startWith } from 'rxjs/operators';
 import {
@@ -9,11 +10,11 @@ import {
   DashboardStats,
   FixtureProfile,
   LeaseRecord,
+  MockUserRuntime,
   RunDraftInput,
   RunSummary,
   ScalingEvent,
   ServiceScaling,
-  UserPool,
   WorkerNode
 } from '../models/control-plane.models';
 import { ControlPlaneApiService } from './control-plane-api.service';
@@ -47,7 +48,7 @@ export class ControlPlaneStore {
   readonly runs = computed<RunSummary[]>(() => this.snapshot()?.runs ?? []);
   readonly services = computed<ServiceScaling[]>(() => this.snapshot()?.services ?? []);
   readonly workerNodes = computed<WorkerNode[]>(() => this.snapshot()?.workerNodes ?? []);
-  readonly userPools = computed<UserPool[]>(() => this.snapshot()?.pools ?? []);
+  readonly userRuntime = computed<MockUserRuntime | null>(() => this.snapshot()?.userRuntime ?? null);
   readonly fixtures = computed<FixtureProfile[]>(() => this.snapshot()?.fixtures ?? []);
   readonly leases = computed<LeaseRecord[]>(() => this.snapshot()?.leases ?? []);
   readonly scalingEvents = computed<ScalingEvent[]>(() => this.snapshot()?.scalingEvents ?? []);
@@ -105,7 +106,7 @@ export class ControlPlaneStore {
       await this.reload();
       return run;
     } catch (error) {
-      this.errorMessage.set(error instanceof Error ? error.message : 'Unable to start run');
+      this.errorMessage.set(this.describeError(error, 'Unable to start run'));
       return null;
     } finally {
       this.pendingRunId.set(null);
@@ -135,9 +136,23 @@ export class ControlPlaneStore {
       await firstValueFrom(action());
       await this.reload();
     } catch (error) {
-      this.errorMessage.set(error instanceof Error ? error.message : 'Unable to update run');
+      this.errorMessage.set(this.describeError(error, 'Unable to update run'));
     } finally {
       this.pendingRunId.set(null);
     }
+  }
+
+  private describeError(error: unknown, fallback: string): string {
+    if (error instanceof HttpErrorResponse) {
+      const body = error.error;
+      if (body && typeof body === 'object') {
+        const detail = 'detail' in body && typeof body.detail === 'string' ? body.detail : null;
+        const message = 'message' in body && typeof body.message === 'string' ? body.message : null;
+        return [message, detail].filter(Boolean).join(' - ') || error.message || fallback;
+      }
+      return error.message || fallback;
+    }
+
+    return error instanceof Error ? error.message : fallback;
   }
 }
