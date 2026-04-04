@@ -151,6 +151,19 @@ export interface LeaseRecord {
   state: 'active' | 'released';
 }
 
+export interface MockUserCredential {
+  id: string;
+  username: string;
+  displayName: string;
+  email: string;
+  password: string | null;
+}
+
+export interface LeaseDetail {
+  lease: LeaseRecord;
+  assignedUsers: MockUserCredential[];
+}
+
 export interface ScalingEvent {
   id: string;
   timestamp: string;

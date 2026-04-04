@@ -36,6 +36,15 @@ public class MockUserController {
     return registry.leases();
   }
 
+  @GetMapping("/leases/{leaseId}")
+  public ResponseEntity<?> lease(@PathVariable String leaseId) {
+    try {
+      return ResponseEntity.ok(registry.lease(leaseId));
+    } catch (NoSuchElementException exception) {
+      return error(HttpStatus.NOT_FOUND, exception.getMessage());
+    }
+  }
+
   @PostMapping("/leases")
   public ResponseEntity<?> createLease(@Valid @RequestBody LeaseRequest request) {
     try {

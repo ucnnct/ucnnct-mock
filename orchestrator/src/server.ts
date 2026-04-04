@@ -83,6 +83,17 @@ app.get('/api/v1/control-plane/leases', async (_req, res) => {
   res.json(await controlPlane.getLeases());
 });
 
+app.get('/api/v1/control-plane/leases/:leaseId', async (req, res) => {
+  try {
+    res.json(await controlPlane.getLease(req.params.leaseId));
+  } catch (error) {
+    res.status(404).json({
+      message: 'Lease not found',
+      detail: error instanceof Error ? error.message : 'unknown error'
+    });
+  }
+});
+
 app.get('/api/v1/control-plane/scaling-events', async (_req, res) => {
   res.json(await controlPlane.getScalingEvents());
 });

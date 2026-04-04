@@ -5,6 +5,7 @@ import {
   ControlPlaneSnapshot,
   DashboardStats,
   FixtureProfile,
+  LeaseDetail,
   LeaseRecord,
   MockUserRuntime,
   RunDraftInput,
@@ -293,6 +294,10 @@ export class ControlPlaneService {
 
   async getLeases(): Promise<LeaseRecord[]> {
     return (await this.getSnapshot()).leases;
+  }
+
+  async getLease(leaseId: string): Promise<LeaseDetail> {
+    return this.httpJson<LeaseDetail>(`${this.mockUserOrigin}/api/v1/mock-users/leases/${leaseId}`);
   }
 
   async getScalingEvents(): Promise<ScalingEvent[]> {

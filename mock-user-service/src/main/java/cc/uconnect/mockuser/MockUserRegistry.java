@@ -54,6 +54,22 @@ public class MockUserRegistry {
         .toList();
   }
 
+  public synchronized LeaseResponse lease(String leaseId) {
+    LeaseEntity lease = leases.get(leaseId);
+    if (lease == null) {
+      throw new NoSuchElementException("Lease " + leaseId + " was not found.");
+    }
+
+    return new LeaseResponse(
+        toLeaseSnapshot(lease),
+        lease.userIds.stream()
+            .map(users::get)
+            .filter(java.util.Objects::nonNull)
+            .map(this::toLeasedUser)
+            .toList()
+    );
+  }
+
   public synchronized LeaseResponse createLease(LeaseRequest request) {
     if (!"staging".equals(request.environment())) {
       throw new IllegalArgumentException("Only staging is supported by mock-user-service.");
@@ -81,6 +97,7 @@ public class MockUserRegistry {
         request.runId(),
         request.runName(),
         request.requestedUsers(),
+        assignedUsers.stream().map((user) -> user.id).toList(),
         issuedAt,
         "active"
     );
@@ -272,6 +289,7 @@ public class MockUserRegistry {
     private final String runId;
     private final String runName;
     private final int users;
+    private final List<String> userIds;
     private final Instant issuedAt;
     private String state;
 
@@ -280,6 +298,7 @@ public class MockUserRegistry {
         String runId,
         String runName,
         int users,
+        List<String> userIds,
         Instant issuedAt,
         String state
     ) {
@@ -287,6 +306,7 @@ public class MockUserRegistry {
       this.runId = runId;
       this.runName = runName;
       this.users = users;
+      this.userIds = List.copyOf(userIds);
       this.issuedAt = issuedAt;
       this.state = state;
     }
