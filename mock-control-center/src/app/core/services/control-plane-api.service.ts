@@ -3,7 +3,12 @@ import { Injectable, inject } from '@angular/core';
 import { Observable } from 'rxjs';
 import { ControlPlaneSnapshot, RunDraftInput, RunSummary } from '../models/control-plane.models';
 
-const DEFAULT_ORCHESTRATOR_ORIGIN = `http://${globalThis.location?.hostname ?? 'localhost'}:7300`;
+const DEFAULT_ORCHESTRATOR_ORIGIN =
+  globalThis.location == null
+    ? 'http://localhost:7300'
+    : globalThis.location.port === '4200'
+      ? `http://${globalThis.location.hostname}:7300`
+      : globalThis.location.origin;
 
 @Injectable({ providedIn: 'root' })
 export class ControlPlaneApiService {
