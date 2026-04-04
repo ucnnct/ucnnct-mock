@@ -30,6 +30,21 @@ services:
       - ./mock-control-center:/workspace/mock-control-center
       - mock-control-center-node-modules:/workspace/mock-control-center/node_modules
 
+  worker-service:
+    image: node:22-bookworm
+    working_dir: /workspace/worker-service
+    command: >
+      sh -c "npm install &&
+      npm start"
+    environment:
+      PORT: "7400"
+    ports:
+      - "7400:7400"
+    volumes:
+      - ./worker-service:/workspace/worker-service
+      - worker-service-node-modules:/workspace/worker-service/node_modules
+
 volumes:
   orchestrator-node-modules:
   mock-control-center-node-modules:
+  worker-service-node-modules:
