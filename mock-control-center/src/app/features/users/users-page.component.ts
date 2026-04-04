@@ -31,7 +31,9 @@ export class UsersPageComponent {
     }
 
     return detail.assignedUsers.filter((user) =>
-      [user.username, user.displayName, user.email].some((value) => value.toLowerCase().includes(query))
+      [user.id, user.username, user.displayName, user.email].some((value) =>
+        value.toLowerCase().includes(query)
+      )
     );
   });
 
@@ -48,6 +50,10 @@ export class UsersPageComponent {
   protected async copyUserCredential(username: string, password: string | null): Promise<void> {
     const payload = password ? `${username}:${password}` : username;
     await this.copyText(payload);
+  }
+
+  protected async copyUserId(userId: string): Promise<void> {
+    await this.copyText(userId);
   }
 
   protected async copyLeaseCredentials(): Promise<void> {

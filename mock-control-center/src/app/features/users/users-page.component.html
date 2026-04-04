@@ -107,6 +107,15 @@
           </div>
         </div>
 
+        <div class="credentials-callout credentials-callout--compact">
+          <strong>Comment récupérer les identifiants</strong>
+          <span>
+            1. Lance un run. 2. Dans un lease <code>active</code>, clique sur
+            <code>Voir les identifiants</code>. 3. Le panneau de credentials s’ouvre avec
+            <code>user id</code>, <code>username</code> et <code>password</code>.
+          </span>
+        </div>
+
         <div class="lease-list">
           <article class="lease-card" *ngFor="let lease of store.leases()">
             <div class="topline">
@@ -164,7 +173,7 @@
     <div class="credentials-callout">
       <strong>Connexion métier</strong>
       <span>
-        Utilise n’importe quel couple <code>username/password</code> ci-dessous sur
+        Utilise n'importe quel couple <code>username/password</code> ci-dessous sur
         <a [href]="stagingAppUrl" target="_blank" rel="noreferrer">{{ stagingAppUrl }}</a>.
       </span>
     </div>
@@ -183,6 +192,7 @@
       <table class="credentials-table">
         <thead>
           <tr>
+            <th>User id</th>
             <th>Username</th>
             <th>Password</th>
             <th>Email</th>
@@ -192,6 +202,18 @@
         </thead>
         <tbody>
           <tr *ngFor="let user of filteredUsers()">
+            <td>
+              <div class="id-cell">
+                <code>{{ user.id }}</code>
+                <button
+                  type="button"
+                  class="action-button action-button--ghost action-button--small"
+                  (click)="copyUserId(user.id)"
+                >
+                  Copier id
+                </button>
+              </div>
+            </td>
             <td><code>{{ user.username }}</code></td>
             <td><code>{{ user.password ?? 'n/a' }}</code></td>
             <td>{{ user.email }}</td>

@@ -45,6 +45,11 @@
   border: 1px solid rgba(183, 213, 232, 0.95);
 }
 
+.credentials-callout--compact {
+  margin-top: 0;
+  margin-bottom: 1rem;
+}
+
 .search-field {
   margin-top: 1rem;
 }
@@ -151,6 +156,11 @@
   color: #0b1f4d;
 }
 
+.action-button--small {
+  padding: 0.38rem 0.62rem;
+  font-size: 0.74rem;
+}
+
 .action-link {
   background: rgba(255, 255, 255, 0.92);
   border: 1px solid rgba(11, 31, 77, 0.16);
@@ -189,6 +199,11 @@
 
 .credentials-table code {
   font-size: 0.84rem;
+}
+
+.id-cell {
+  display: grid;
+  gap: 0.45rem;
 }
 
 @media (max-width: 1080px) {
