@@ -16,7 +16,7 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAMESPACE: ${{ github.repository_owner }}
+  IMAGE_NAMESPACE: micheleloka
 
 jobs:
   detect-changes:
@@ -35,10 +35,10 @@ jobs:
         id: filter
         with:
           filters: |
-            frontend: ["mock-control-center/**"]
-            orchestrator: ["orchestrator/**"]
-            worker: ["worker-service/**"]
-            mockuser: ["mock-user-service/**"]
+            frontend: ["mock-control-center/**", ".github/workflows/deploy-main.yml"]
+            orchestrator: ["orchestrator/**", ".github/workflows/deploy-main.yml"]
+            worker: ["worker-service/**", ".github/workflows/deploy-main.yml"]
+            mockuser: ["mock-user-service/**", ".github/workflows/deploy-main.yml"]
 
   tests:
     if: "!contains(github.event.head_commit.message, '[skip ci]')"
@@ -197,8 +197,8 @@ jobs:
       - uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.GHCR_USERNAME }}
+          password: ${{ secrets.GHCR_TOKEN }}
 
       - name: Build and push mock-control-center
         if: needs.detect-changes.outputs.frontend == 'true'
