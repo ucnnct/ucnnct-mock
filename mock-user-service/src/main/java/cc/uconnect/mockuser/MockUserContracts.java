@@ -26,6 +26,17 @@ record MockUserSummary(
 ) {
 }
 
+record LeasedMockUser(
+    String id,
+    String username,
+    String displayName,
+    String email,
+    String poolId,
+    List<String> tags,
+    String password
+) {
+}
+
 record UserPoolSnapshot(
     String id,
     String name,
@@ -74,7 +85,7 @@ record LeaseSnapshot(
 
 record LeaseResponse(
     LeaseSnapshot lease,
-    List<MockUserSummary> assignedUsers
+    List<LeasedMockUser> assignedUsers
 ) {
 }
 

@@ -4,3 +4,17 @@ spring:
 
 server:
   port: ${SERVER_PORT:7500}
+
+staging:
+  identity:
+    provision-enabled: ${STAGING_IDENTITY_PROVISION_ENABLED:false}
+    base-url: ${STAGING_IDENTITY_BASE_URL:https://auth-staging.uconnect.cc}
+    realm: ${STAGING_IDENTITY_REALM:ucnnct}
+    admin-client-id: ${STAGING_IDENTITY_ADMIN_CLIENT_ID:admin-cli}
+    admin-username: ${STAGING_IDENTITY_ADMIN_USERNAME:admin}
+    admin-password: ${STAGING_IDENTITY_ADMIN_PASSWORD:}
+    client-id: ${STAGING_IDENTITY_CLIENT_ID:ucnnct-bff}
+    client-secret: ${STAGING_IDENTITY_CLIENT_SECRET:}
+    target-base-url: ${STAGING_IDENTITY_TARGET_BASE_URL:https://staging.uconnect.cc}
+    username-prefix: ${STAGING_IDENTITY_USERNAME_PREFIX:mock.staging}
+    default-password: ${STAGING_IDENTITY_DEFAULT_PASSWORD:}

@@ -1,15 +1,12 @@
 package cc.uconnect.mockuser;
 
 import java.time.Instant;
-import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
-import java.util.UUID;
-import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -19,11 +16,10 @@ public class MockUserRegistry {
   private final Map<String, LeaseEntity> leases = new LinkedHashMap<>();
   private final List<FixtureProfile> fixtures = new ArrayList<>();
 
-  public MockUserRegistry() {
+  public MockUserRegistry(StagingIdentityProvisioner provisioner) {
     seedPools();
-    seedUsers();
+    seedUsers(provisioner);
     seedFixtures();
-    seedLeases();
   }
 
   public synchronized MockUserRuntime runtime() {
@@ -100,10 +96,10 @@ public class MockUserRegistry {
     }
 
     if (assignedUsers.size() < request.requestedUsers()) {
-      throw new IllegalStateException("Not enough mock users are available to satisfy the lease request.");
+      throw new IllegalStateException("Not enough staging-backed mock users are available to satisfy the lease request.");
     }
 
-    String leaseId = "lease-" + UUID.randomUUID().toString().substring(0, 8);
+    String leaseId = "lease-" + java.util.UUID.randomUUID().toString().substring(0, 8);
     Instant issuedAt = Instant.now();
 
     assignedUsers.forEach((user) -> user.leaseId = leaseId);
@@ -121,7 +117,7 @@ public class MockUserRegistry {
 
     return new LeaseResponse(
         toLeaseSnapshot(lease),
-        assignedUsers.stream().map(this::toSummary).toList()
+        assignedUsers.stream().map(this::toLeasedUser).toList()
     );
   }
 
@@ -178,8 +174,8 @@ public class MockUserRegistry {
         "campus-main",
         "Campus Main Pool",
         "Balanced campus-wide activity with broad social graph coverage.",
-        720,
-        120,
+        12,
+        8,
         List.of("balanced", "browse", "notifications"),
         "Default pool for mixed realistic runs."
     ));
@@ -187,8 +183,8 @@ public class MockUserRegistry {
         "realtime-core",
         "Realtime Core Pool",
         "Dense private messaging and high websocket occupancy.",
-        360,
-        80,
+        8,
+        6,
         List.of("realtime", "private-message", "presence"),
         "Preferred when private conversation loops dominate."
     ));
@@ -196,8 +192,8 @@ public class MockUserRegistry {
         "community-groups",
         "Community Groups Pool",
         "Pre-seeded members for group-heavy sessions and shared channels.",
-        300,
-        60,
+        8,
+        6,
         List.of("groups", "moderation", "community"),
         "Best fit for group resolution and notification stress."
     ));
@@ -205,8 +201,8 @@ public class MockUserRegistry {
         "attachment-lab",
         "Attachment Lab Pool",
         "Users with media-friendly fixtures and file metadata ready.",
-        160,
-        40,
+        4,
+        4,
         List.of("media", "minio", "attachments"),
         "Reserved for attachment-heavy conversations."
     ));
@@ -216,92 +212,82 @@ public class MockUserRegistry {
     poolConfigs.put(pool.id, pool);
   }
 
-  private void seedUsers() {
+  private void seedUsers(StagingIdentityProvisioner provisioner) {
+    List<ProvisionedMockUser> provisionedUsers = provisioner.provision(poolConfigs.values().stream()
+        .map((pool) -> new PoolSeedRequest(pool.id, pool.totalUsers, pool.tags))
+        .toList());
+
+    if (!provisionedUsers.isEmpty()) {
+      provisionedUsers.forEach((user) -> users.put(user.id(), new MockUserEntity(
+          user.id(),
+          user.username(),
+          user.displayName(),
+          user.email(),
+          user.poolId(),
+          user.tags(),
+          user.password()
+      )));
+      return;
+    }
+
     poolConfigs.values().forEach((pool) -> {
       for (int index = 1; index <= pool.totalUsers; index += 1) {
-        String id = pool.id + "-" + String.format("%04d", index);
-        String username = pool.id.replace('-', '.') + "." + index;
-        users.put(id, new MockUserEntity(
-            id,
+        String syntheticId = pool.id + "-" + String.format("%04d", index);
+        String username = "synthetic." + pool.id.replace('-', '.') + "." + index;
+        users.put(syntheticId, new MockUserEntity(
+            syntheticId,
             username,
-            displayName(pool, index),
+            displayName(pool.id, index),
             username + "@mock.uconnect.cc",
             pool.id,
-            pool.tags
+            pool.tags,
+            null
         ));
       }
     });
-  }
-
-  private String displayName(PoolConfig pool, int index) {
-    String prefix = switch (pool.id) {
-      case "realtime-core" -> "Realtime";
-      case "community-groups" -> "Community";
-      case "attachment-lab" -> "Attachment";
-      default -> "Campus";
-    };
-    return prefix + " User " + index;
   }
 
   private void seedFixtures() {
     fixtures.add(new FixtureProfile(
         "fixture-campus",
         "Campus graph",
-        "Students already linked with friendships and starter conversations.",
-        420,
-        48,
-        1_380,
+        "Provisioned staging users ready for mixed browse and notification pressure.",
+        12,
+        4,
+        18,
         0,
         "ready"
     ));
     fixtures.add(new FixtureProfile(
         "fixture-societies",
         "Societies and clubs",
-        "Group-heavy fixture set with owners, moderators and active channels.",
-        190,
-        34,
-        520,
-        12,
+        "Group-heavy staging identities prepared for group creation and member churn.",
+        8,
+        4,
+        10,
+        6,
         "ready"
     ));
     fixtures.add(new FixtureProfile(
         "fixture-media",
         "Media playground",
-        "Users with reusable files and attachment metadata templates.",
-        88,
+        "Attachment-focused identities used to stress uploads and file-linked messages.",
+        4,
+        2,
+        4,
         12,
-        164,
-        96,
-        "warming"
+        "ready"
     ));
   }
 
-  private void seedLeases() {
-    LeaseEntity activeLease = new LeaseEntity(
-        "lease-seed-live",
-        "run-seed-live",
-        "staging-evening-burst",
-        "realtime-core",
-        poolConfigs.get("realtime-core").name,
-        48,
-        Instant.now().minus(12, ChronoUnit.MINUTES),
-        "active"
-    );
-    leases.put(activeLease.id, activeLease);
-    availableUsersFromPool(activeLease.poolId, activeLease.users)
-        .forEach((user) -> user.leaseId = activeLease.id);
-
-    LeaseEntity releasedLease = new LeaseEntity(
-        "lease-seed-history",
-        "run-seed-media",
-        "media-checkpoint",
-        "attachment-lab",
-        poolConfigs.get("attachment-lab").name,
-        24,
-        Instant.now().minus(90, ChronoUnit.MINUTES),
-        "released"
-    );
-    leases.put(releasedLease.id, releasedLease);
+  private String displayName(String poolId, int index) {
+    String prefix = switch (poolId) {
+      case "realtime-core" -> "Realtime";
+      case "community-groups" -> "Community";
+      case "attachment-lab" -> "Attachment";
+      default -> "Campus";
+    };
+    return prefix + " Mock " + index;
   }
 
   private LeaseSnapshot toLeaseSnapshot(LeaseEntity lease) {
@@ -317,14 +303,15 @@ public class MockUserRegistry {
     );
   }
 
-  private MockUserSummary toSummary(MockUserEntity user) {
-    return new MockUserSummary(
+  private LeasedMockUser toLeasedUser(MockUserEntity user) {
+    return new LeasedMockUser(
         user.id,
         user.username,
         user.displayName,
         user.email,
         user.poolId,
-        user.tags
+        user.tags,
+        user.password
     );
   }
 
@@ -346,6 +333,7 @@ public class MockUserRegistry {
     private final String email;
     private final String poolId;
     private final List<String> tags;
+    private final String password;
     private String leaseId;
 
     private MockUserEntity(
@@ -354,7 +342,8 @@ public class MockUserRegistry {
         String displayName,
         String email,
         String poolId,
-        List<String> tags
+        List<String> tags,
+        String password
     ) {
       this.id = id;
       this.username = username;
@@ -362,6 +351,7 @@ public class MockUserRegistry {
       this.email = email;
       this.poolId = poolId;
       this.tags = tags;
+      this.password = password;
     }
 
     private boolean isLeased() {
