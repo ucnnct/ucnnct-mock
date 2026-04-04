@@ -7,6 +7,11 @@ services:
       npm start"
     environment:
       PORT: "7300"
+      WORKER_SERVICE_ORIGIN: "http://worker-service:7400"
+      MOCK_USER_SERVICE_ORIGIN: "http://mock-user-service:7500"
+    depends_on:
+      - worker-service
+      - mock-user-service
     ports:
       - "7300:7300"
     volumes:

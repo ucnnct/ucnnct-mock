@@ -1,11 +1,11 @@
 import cors from 'cors';
 import express from 'express';
 import { z } from 'zod';
-import { ControlPlaneEngine } from './control-plane-engine.js';
+import { ControlPlaneService } from './control-plane-service.js';
 
 const app = express();
 const port = Number(process.env.PORT ?? 7300);
-const engine = new ControlPlaneEngine();
+const controlPlane = new ControlPlaneService();
 
 const runDraftSchema = z.object({
   runName: z.string().min(3).max(80),
@@ -47,52 +47,47 @@ app.use(
 );
 app.use(express.json());
 
-app.get('/health', (_req, res) => {
-  res.json({
-    service: 'orchestrator',
-    status: 'ok',
-    environment: 'staging',
-    generatedAt: new Date().toISOString()
-  });
+app.get('/health', async (_req, res) => {
+  res.json(await controlPlane.health());
 });
 
-app.get('/api/v1/control-plane', (_req, res) => {
-  res.json(engine.getSnapshot());
+app.get('/api/v1/control-plane', async (_req, res) => {
+  res.json(await controlPlane.getSnapshot());
 });
 
-app.get('/api/v1/control-plane/dashboard', (_req, res) => {
-  res.json(engine.getDashboard());
+app.get('/api/v1/control-plane/dashboard', async (_req, res) => {
+  res.json(await controlPlane.getDashboard());
 });
 
-app.get('/api/v1/control-plane/runs', (_req, res) => {
-  res.json(engine.getRuns());
+app.get('/api/v1/control-plane/runs', async (_req, res) => {
+  res.json(await controlPlane.getRuns());
 });
 
-app.get('/api/v1/control-plane/services', (_req, res) => {
-  res.json(engine.getServices());
+app.get('/api/v1/control-plane/services', async (_req, res) => {
+  res.json(await controlPlane.getServices());
 });
 
-app.get('/api/v1/control-plane/workers', (_req, res) => {
-  res.json(engine.getWorkerNodes());
+app.get('/api/v1/control-plane/workers', async (_req, res) => {
+  res.json(await controlPlane.getWorkerNodes());
 });
 
-app.get('/api/v1/control-plane/pools', (_req, res) => {
-  res.json(engine.getPools());
+app.get('/api/v1/control-plane/pools', async (_req, res) => {
+  res.json(await controlPlane.getPools());
 });
 
-app.get('/api/v1/control-plane/fixtures', (_req, res) => {
-  res.json(engine.getFixtures());
+app.get('/api/v1/control-plane/fixtures', async (_req, res) => {
+  res.json(await controlPlane.getFixtures());
 });
 
-app.get('/api/v1/control-plane/leases', (_req, res) => {
-  res.json(engine.getLeases());
+app.get('/api/v1/control-plane/leases', async (_req, res) => {
+  res.json(await controlPlane.getLeases());
 });
 
-app.get('/api/v1/control-plane/scaling-events', (_req, res) => {
-  res.json(engine.getScalingEvents());
+app.get('/api/v1/control-plane/scaling-events', async (_req, res) => {
+  res.json(await controlPlane.getScalingEvents());
 });
 
-app.post('/api/v1/control-plane/runs', (req, res) => {
+app.post('/api/v1/control-plane/runs', async (req, res) => {
   const parse = runDraftSchema.safeParse(req.body);
   if (!parse.success) {
     res.status(400).json({
@@ -102,11 +97,18 @@ app.post('/api/v1/control-plane/runs', (req, res) => {
     return;
   }
 
-  res.status(201).json(engine.startRun(parse.data));
+  try {
+    res.status(201).json(await controlPlane.startRun(parse.data));
+  } catch (error) {
+    res.status(502).json({
+      message: 'Unable to start the run',
+      detail: error instanceof Error ? error.message : 'unknown error'
+    });
+  }
 });
 
-app.post('/api/v1/control-plane/runs/:runId/pause', (req, res) => {
-  const run = engine.pauseRun(req.params.runId);
+app.post('/api/v1/control-plane/runs/:runId/pause', async (req, res) => {
+  const run = await controlPlane.pauseRun(req.params.runId);
   if (!run) {
     res.status(404).json({ message: 'Run not found' });
     return;
@@ -115,8 +117,8 @@ app.post('/api/v1/control-plane/runs/:runId/pause', (req, res) => {
   res.json(run);
 });
 
-app.post('/api/v1/control-plane/runs/:runId/resume', (req, res) => {
-  const run = engine.resumeRun(req.params.runId);
+app.post('/api/v1/control-plane/runs/:runId/resume', async (req, res) => {
+  const run = await controlPlane.resumeRun(req.params.runId);
   if (!run) {
     res.status(404).json({ message: 'Run not found' });
     return;
@@ -125,8 +127,8 @@ app.post('/api/v1/control-plane/runs/:runId/resume', (req, res) => {
   res.json(run);
 });
 
-app.post('/api/v1/control-plane/runs/:runId/stop', (req, res) => {
-  const run = engine.stopRun(req.params.runId);
+app.post('/api/v1/control-plane/runs/:runId/stop', async (req, res) => {
+  const run = await controlPlane.stopRun(req.params.runId);
   if (!run) {
     res.status(404).json({ message: 'Run not found' });
     return;
