@@ -15,6 +15,7 @@ import {
 } from './models.js';
 import { LiveTrafficDriver } from './live-traffic.js';
 import { StagingApiDriver } from './staging-api.js';
+import { StagingRealtimeDriver } from './staging-realtime.js';
 
 const TICK_MS = 2_000;
 const USER_SNAPSHOT_LIMIT = 18;
@@ -81,6 +82,7 @@ export class WorkerEngine {
   private assignments: WorkerAssignmentRuntime[] = [];
   private readonly liveTraffic = new LiveTrafficDriver();
   private readonly stagingApi = new StagingApiDriver();
+  private readonly stagingRealtime = new StagingRealtimeDriver();
 
   constructor() {
     this.assignments = this.buildSeedAssignments();
@@ -738,6 +740,7 @@ export class WorkerEngine {
         user.nextActionAtMs = now + this.sampleOfflineCooldownMs(assignment, user);
         this.liveTraffic.forget(this.liveSessionKey(assignment.id, user.id));
         this.stagingApi.forget(this.liveSessionKey(assignment.id, user.id));
+        this.stagingRealtime.forget(this.liveSessionKey(assignment.id, user.id));
         return this.outcome(action, requestCost, latencyMs, 'Closed the session and entered offline cooldown.');
       }
     }
@@ -765,6 +768,7 @@ export class WorkerEngine {
     users.forEach((user) => {
       this.liveTraffic.forget(this.liveSessionKey(assignment.id, user.id));
       this.stagingApi.forget(this.liveSessionKey(assignment.id, user.id));
+      this.stagingRealtime.forget(this.liveSessionKey(assignment.id, user.id));
     });
 
     return {
@@ -935,13 +939,20 @@ export class WorkerEngine {
   } {
     return users.reduce(
       (aggregate, user) => {
-        const shellStats = this.liveTraffic.getStats(this.liveSessionKey(assignmentId, user.id));
-        const businessStats = this.stagingApi.getStats(this.liveSessionKey(assignmentId, user.id));
+        const sessionKey = this.liveSessionKey(assignmentId, user.id);
+        const shellStats = this.liveTraffic.getStats(sessionKey);
+        const businessStats = this.stagingApi.getStats(sessionKey);
+        const realtimeStats = this.stagingRealtime.getStats(sessionKey);
         const stats = {
-          requests: shellStats.requests + businessStats.requests,
-          failures: shellStats.failures + businessStats.failures,
-          lastStatus: businessStats.lastStatus ?? shellStats.lastStatus,
-          lastActivityAtMs: Math.max(shellStats.lastActivityAtMs ?? 0, businessStats.lastActivityAtMs ?? 0) || null
+          requests: shellStats.requests + businessStats.requests + realtimeStats.requests,
+          failures: shellStats.failures + businessStats.failures + realtimeStats.failures,
+          lastStatus: realtimeStats.lastStatus ?? businessStats.lastStatus ?? shellStats.lastStatus,
+          lastActivityAtMs:
+            Math.max(
+              shellStats.lastActivityAtMs ?? 0,
+              businessStats.lastActivityAtMs ?? 0,
+              realtimeStats.lastActivityAtMs ?? 0
+            ) || null
         };
         const lastActivityAtMs = aggregate.lastActivityAtMs === null
           ? stats.lastActivityAtMs
@@ -972,20 +983,79 @@ export class WorkerEngine {
       return;
     }
 
+    const sessionKey = this.liveSessionKey(assignment.id, user.id);
+    const peerCandidates = (assignment.assignedUsers ?? []).filter((candidate) => candidate.id !== user.identity?.id);
+    const context = this.stagingApi.getContext(sessionKey);
+
     this.liveTraffic.schedule({
-      sessionKey: this.liveSessionKey(assignment.id, user.id),
+      sessionKey,
       baseUrl: assignment.targetBaseUrl,
       action,
       connectedToWs: user.connectedToWs
     });
 
-    this.stagingApi.schedule({
-      sessionKey: this.liveSessionKey(assignment.id, user.id),
+    const realtimeInput = {
+      sessionKey,
       baseUrl: assignment.targetBaseUrl,
       action,
       identity: user.identity,
-      peerCandidates: (assignment.assignedUsers ?? []).filter((candidate) => candidate.id !== user.identity?.id)
-    });
+      peerCandidates,
+      context
+    } as const;
+
+    switch (action) {
+      case 'send_private_message':
+        if (this.stagingRealtime.isReady(sessionKey)) {
+          this.stagingRealtime.schedule(realtimeInput);
+        } else {
+          this.stagingApi.schedule({
+            sessionKey,
+            baseUrl: assignment.targetBaseUrl,
+            action,
+            identity: user.identity,
+            peerCandidates
+          });
+        }
+        break;
+      case 'send_group_message':
+        if (this.stagingRealtime.isReady(sessionKey) && !!context.currentGroupId) {
+          this.stagingRealtime.schedule(realtimeInput);
+        } else {
+          this.stagingApi.schedule({
+            sessionKey,
+            baseUrl: assignment.targetBaseUrl,
+            action,
+            identity: user.identity,
+            peerCandidates
+          });
+        }
+        break;
+      case 'login':
+      case 'open_home':
+      case 'fetch_notifications':
+      case 'fetch_friends':
+      case 'open_private_conversation':
+      case 'open_group_conversation':
+      case 'open_notifications':
+        this.stagingApi.schedule({
+          sessionKey,
+          baseUrl: assignment.targetBaseUrl,
+          action,
+          identity: user.identity,
+          peerCandidates
+        });
+        this.stagingRealtime.schedule(realtimeInput);
+        break;
+      default:
+        this.stagingApi.schedule({
+          sessionKey,
+          baseUrl: assignment.targetBaseUrl,
+          action,
+          identity: user.identity,
+          peerCandidates
+        });
+        break;
+    }
   }
 
   private liveSessionKey(assignmentId: string, userId: string): string {
