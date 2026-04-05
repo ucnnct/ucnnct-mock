@@ -37,6 +37,17 @@ export class ControlPlaneStore {
   readonly leaseDetailLoading = signal(false);
 
   readonly architecture = computed<ArchitectureStage[]>(() => this.snapshot()?.architecture ?? []);
+  readonly planner = computed(() => {
+    return (
+      this.snapshot()?.planner ?? {
+        workerShardSize: 250,
+        identityReuseFactor: 25,
+        workerMinReplicas: 2,
+        workerMaxReplicas: 40,
+        maxVirtualUsers: 10_000
+      }
+    );
+  });
   readonly dashboardStats = computed<DashboardStats>(() => {
     return (
       this.snapshot()?.dashboard ?? {

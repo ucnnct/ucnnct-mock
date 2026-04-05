@@ -2,10 +2,10 @@
   <article class="hero panel">
     <div>
       <span class="eyebrow">Scaling</span>
-      <h2>Replica movement, HPA posture and worker pod pressure</h2>
+      <h2>Replica movement, HPA posture and autoscaled worker pressure</h2>
       <p class="muted">
         This view is the operator console for the staging target. It shows which service is hot, how far
-        the replicas moved, and how much pressure the worker cluster is carrying.
+        the replicas moved, and how much pressure the worker plane is carrying for the current virtual-user volume.
       </p>
     </div>
   </article>
@@ -22,6 +22,10 @@
     <article class="metric-card">
       <span class="metric-label">Worker pods</span>
       <div class="metric-value">{{ store.dashboardStats().workerPods }}</div>
+    </article>
+    <article class="metric-card">
+      <span class="metric-label">Worker range</span>
+      <div class="metric-value">{{ store.planner().workerMinReplicas }}-{{ store.planner().workerMaxReplicas }}</div>
     </article>
     <article class="metric-card">
       <span class="metric-label">Hot services</span>
@@ -104,9 +108,14 @@
       <div class="panel-header">
         <div>
           <span class="eyebrow">Worker cluster</span>
-          <h3>Dedicated execution pods</h3>
+          <h3>Autoscaled execution pods</h3>
         </div>
       </div>
+
+      <p class="muted">
+        Planner shard size: {{ store.planner().workerShardSize }} users per shard. Identity reuse factor:
+        1 real staging identity for roughly {{ store.planner().identityReuseFactor }} virtual users.
+      </p>
 
       <div class="worker-list">
         <article class="worker-card" *ngFor="let node of store.workerNodes()">

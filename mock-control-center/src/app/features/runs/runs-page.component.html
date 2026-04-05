@@ -4,8 +4,8 @@
       <span class="eyebrow">Runs</span>
       <h2>Compose one realistic user population and launch it on staging</h2>
       <p class="muted">
-        The run builder stays focused on the single generic user engine: one session model, one weighted
-        behavior mix, and one staging target.
+        The run builder stays focused on one generic user engine. The number of virtual users stays fully operator-defined,
+        and the planner derives shards, leased identities and target worker replicas from that input.
       </p>
     </div>
 
@@ -13,6 +13,7 @@
       <button class="btn btn-secondary" type="button" (click)="applyPreset('balanced')">Balanced</button>
       <button class="btn btn-secondary" type="button" (click)="applyPreset('conversation')">Conversation wave</button>
       <button class="btn btn-secondary" type="button" (click)="applyPreset('attachments')">Attachment burst</button>
+      <button class="btn btn-secondary" type="button" (click)="applyPreset('validation10k')">10k validation</button>
     </div>
   </article>
 
@@ -37,7 +38,7 @@
         </label>
         <label class="field">
           <span>Virtual users</span>
-          <input type="number" formControlName="virtualUsers" min="1" />
+          <input type="number" formControlName="virtualUsers" min="1" [max]="planner().maxVirtualUsers" />
         </label>
         <label class="field">
           <span>Duration (s)</span>
@@ -122,7 +123,7 @@
 
       <div class="button-row">
         <button class="btn btn-primary" type="submit" [disabled]="store.pendingRunId() === 'new'">
-          {{ store.pendingRunId() === 'new' ? 'Starting…' : 'Start run' }}
+          {{ store.pendingRunId() === 'new' ? 'Starting...' : 'Start run' }}
         </button>
         <small class="muted" *ngIf="store.errorMessage()">{{ store.errorMessage() }}</small>
       </div>
@@ -141,11 +142,19 @@
         <div class="metric-grid">
           <article class="metric-card">
             <span class="metric-label">Users</span>
-            <div class="metric-value">{{ preview().virtualUsers }}</div>
+            <div class="metric-value">{{ plannedRun().requestedUsers }}</div>
           </article>
           <article class="metric-card">
-            <span class="metric-label">Ramp-up</span>
-            <div class="metric-value">{{ preview().rampUpSeconds }} s</div>
+            <span class="metric-label">Leased identities</span>
+            <div class="metric-value">{{ plannedRun().leasedIdentities }}</div>
+          </article>
+          <article class="metric-card">
+            <span class="metric-label">Worker shards</span>
+            <div class="metric-value">{{ plannedRun().workerShards }}</div>
+          </article>
+          <article class="metric-card">
+            <span class="metric-label">Target workers</span>
+            <div class="metric-value">{{ plannedRun().targetWorkerReplicas }}</div>
           </article>
           <article class="metric-card">
             <span class="metric-label">Websockets</span>
@@ -155,6 +164,13 @@
             <span class="metric-label">Weight sum</span>
             <div class="metric-value">{{ totalWeight() }}</div>
           </article>
+        </div>
+
+        <div class="detail-grid">
+          <div><strong>{{ plannedRun().usersPerShard }}</strong><span>users / shard</span></div>
+          <div><strong>{{ plannedRun().identitiesPerShard }}</strong><span>identities / shard</span></div>
+          <div><strong>{{ planner().workerShardSize }}</strong><span>planner shard size</span></div>
+          <div><strong>{{ planner().maxVirtualUsers }}</strong><span>configured ceiling</span></div>
         </div>
       </article>
 
@@ -192,34 +208,16 @@
             <span>{{ run.messagesPerSecond }} msg/s</span>
           </div>
 
+          <div class="run-card-metrics">
+            <span>{{ run.workerShards }} shards</span>
+            <span>{{ run.leasedIdentities }} identities</span>
+            <span>{{ run.targetWorkerReplicas }} workers</span>
+          </div>
+
           <div class="button-row">
-            <button
-              class="btn btn-secondary"
-              type="button"
-              *ngIf="run.status === 'running'"
-              (click)="pause(run.id); $event.stopPropagation()"
-              [disabled]="store.isRunPending(run.id)"
-            >
-              Pause
-            </button>
-            <button
-              class="btn btn-secondary"
-              type="button"
-              *ngIf="run.status === 'paused'"
-              (click)="resume(run.id); $event.stopPropagation()"
-              [disabled]="store.isRunPending(run.id)"
-            >
-              Resume
-            </button>
-            <button
-              class="btn btn-danger"
-              type="button"
-              *ngIf="run.status === 'running' || run.status === 'paused'"
-              (click)="stop(run.id); $event.stopPropagation()"
-              [disabled]="store.isRunPending(run.id)"
-            >
-              Stop
-            </button>
+            <button class="btn btn-secondary" type="button" *ngIf="run.status === 'running'" (click)="pause(run.id); $event.stopPropagation()" [disabled]="store.isRunPending(run.id)">Pause</button>
+            <button class="btn btn-secondary" type="button" *ngIf="run.status === 'paused'" (click)="resume(run.id); $event.stopPropagation()" [disabled]="store.isRunPending(run.id)">Resume</button>
+            <button class="btn btn-danger" type="button" *ngIf="run.status === 'running' || run.status === 'paused'" (click)="stop(run.id); $event.stopPropagation()" [disabled]="store.isRunPending(run.id)">Stop</button>
           </div>
         </div>
       </article>
@@ -234,6 +232,10 @@
         </div>
 
         <div class="detail-grid">
+          <div><strong>{{ run.virtualUsers }}</strong><span>virtual users</span></div>
+          <div><strong>{{ run.leasedIdentities }}</strong><span>leased identities</span></div>
+          <div><strong>{{ run.workerShards }}</strong><span>worker shards</span></div>
+          <div><strong>{{ run.targetWorkerReplicas }}</strong><span>target workers</span></div>
           <div><strong>{{ run.connectedUsers }}</strong><span>connected users</span></div>
           <div><strong>{{ run.openSockets }}</strong><span>open sockets</span></div>
           <div><strong>{{ run.uploadsPerMinute }}</strong><span>uploads / min</span></div>

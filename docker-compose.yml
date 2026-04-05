@@ -9,6 +9,11 @@ services:
       PORT: "7300"
       WORKER_SERVICE_ORIGIN: "http://worker-service:7400"
       MOCK_USER_SERVICE_ORIGIN: "http://mock-user-service:7500"
+      WORKER_SHARD_SIZE: "250"
+      IDENTITY_REUSE_FACTOR: "25"
+      WORKER_MIN_REPLICAS: "2"
+      WORKER_MAX_REPLICAS: "40"
+      MAX_VIRTUAL_USERS: "10000"
     depends_on:
       - worker-service
       - mock-user-service

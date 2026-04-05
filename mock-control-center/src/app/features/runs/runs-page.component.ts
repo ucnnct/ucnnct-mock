@@ -54,6 +54,7 @@ export class RunsPageComponent {
   });
 
   protected readonly preview = computed<RunDraftInput>(() => this.formValue() as RunDraftInput);
+  protected readonly planner = this.store.planner;
   protected readonly totalWeight = computed(() => {
     const weights = this.preview().weights;
     return (
@@ -80,12 +81,35 @@ export class RunsPageComponent {
     const chosen = this.selectedRunId();
     return this.store.runs().find((run) => run.id === chosen) ?? this.store.latestRun();
   });
+  protected readonly plannedRun = computed(() => {
+    const preview = this.preview();
+    const planner = this.planner();
+    const requestedUsers = preview.virtualUsers;
+    const workerShards = Math.max(1, Math.ceil(requestedUsers / planner.workerShardSize));
+    const targetWorkerReplicas = Math.min(
+      planner.workerMaxReplicas,
+      Math.max(planner.workerMinReplicas, workerShards)
+    );
+    const leasedIdentities = Math.min(
+      requestedUsers,
+      Math.max(targetWorkerReplicas, Math.ceil(requestedUsers / planner.identityReuseFactor))
+    );
+
+    return {
+      requestedUsers,
+      workerShards,
+      targetWorkerReplicas,
+      leasedIdentities,
+      identitiesPerShard: Math.max(1, Math.ceil(leasedIdentities / workerShards)),
+      usersPerShard: Math.max(1, Math.ceil(requestedUsers / workerShards))
+    };
+  });
 
   protected selectRun(runId: string): void {
     this.selectedRunId.set(runId);
   }
 
-  protected applyPreset(preset: 'balanced' | 'conversation' | 'attachments'): void {
+  protected applyPreset(preset: 'balanced' | 'conversation' | 'attachments' | 'validation10k'): void {
     if (preset === 'balanced') {
       this.form.patchValue({
         runName: 'staging-realistic-01',
@@ -107,6 +131,20 @@ export class RunsPageComponent {
         websocketRatio: 0.92,
         weights: { browse: 14, privateMessage: 40, group: 24, media: 4, social: 8, notificationCheck: 10 },
         media: { uploadProbability: 0.03, minFileSizeKb: 32, maxFileSizeKb: 512 }
+      });
+      return;
+    }
+
+    if (preset === 'validation10k') {
+      this.form.patchValue({
+        runName: 'staging-validation-10k',
+        virtualUsers: 10_000,
+        durationSeconds: 900,
+        rampUpSeconds: 300,
+        websocketRatio: 0.88,
+        avgSessionDurationSeconds: 480,
+        weights: { browse: 18, privateMessage: 28, group: 22, media: 8, social: 12, notificationCheck: 12 },
+        media: { uploadProbability: 0.04, minFileSizeKb: 64, maxFileSizeKb: 1024 }
       });
       return;
     }

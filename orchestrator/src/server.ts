@@ -5,12 +5,13 @@ import { ControlPlaneService } from './control-plane-service.js';
 
 const app = express();
 const port = Number(process.env.PORT ?? 7300);
+const maxVirtualUsers = Number(process.env.MAX_VIRTUAL_USERS ?? 10_000);
 const controlPlane = new ControlPlaneService();
 
 const runDraftSchema = z.object({
   runName: z.string().min(3).max(80),
   environment: z.literal('staging'),
-  virtualUsers: z.number().int().min(1).max(20000),
+  virtualUsers: z.number().int().min(1).max(maxVirtualUsers),
   durationSeconds: z.number().int().min(30).max(7200),
   rampUpSeconds: z.number().int().min(0).max(3600),
   thinkTimeMinMs: z.number().int().min(0).max(60000),

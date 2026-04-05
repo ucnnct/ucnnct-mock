@@ -63,6 +63,9 @@ export interface RunEvent {
 export interface RunSummary extends RunDraftInput {
   id: string;
   status: RunStatus;
+  leasedIdentities: number;
+  workerShards: number;
+  targetWorkerReplicas: number;
   startedAt: string;
   updatedAt: string;
   elapsedSeconds: number;
@@ -182,8 +185,17 @@ export interface DashboardStats {
   deployedServices: number;
 }
 
+export interface LoadPlannerConfig {
+  workerShardSize: number;
+  identityReuseFactor: number;
+  workerMinReplicas: number;
+  workerMaxReplicas: number;
+  maxVirtualUsers: number;
+}
+
 export interface ControlPlaneSnapshot {
   architecture: ArchitectureStage[];
+  planner: LoadPlannerConfig;
   dashboard: DashboardStats;
   runs: RunSummary[];
   services: ServiceScaling[];

@@ -367,6 +367,7 @@ export class WorkerEngine {
 
   private buildUsers(input: WorkerAssignmentInput, createdAtMs: number): VirtualUserState[] {
     const rampUpMs = input.rampUpSeconds * 1_000;
+    const identities = input.assignedUsers ?? [];
 
     return Array.from({ length: input.virtualUsers }, (_value, index) => {
       const activationOffsetMs =
@@ -382,7 +383,7 @@ export class WorkerEngine {
 
       return {
         id: `vu-${String(index + 1).padStart(4, '0')}`,
-        identity: input.assignedUsers?.[index] ?? null,
+        identity: identities.length > 0 ? identities[index % identities.length] ?? null : null,
         authenticated: false,
         connectedToWs: false,
         currentPage: 'HOME',

@@ -7,6 +7,7 @@ import {
   FixtureProfile,
   LeaseDetail,
   LeaseRecord,
+  LoadPlannerConfig,
   MockUserRuntime,
   RunDraftInput,
   RunEvent,
@@ -15,6 +16,7 @@ import {
   ServiceScaling,
   WorkerNode
 } from './models.js';
+import { KubernetesWorkerController, WorkerPodTarget } from './kubernetes-worker-controller.js';
 
 type WorkerObjectiveMix = {
   browse: number;
@@ -58,7 +60,6 @@ type WorkerAssignment = {
   errorRate: number;
   p95LatencyMs: number;
   objectiveMix: WorkerObjectiveMix;
-  actionCounters: Record<string, number>;
   recentEvents: Array<{
     id: string;
     timestamp: string;
@@ -102,10 +103,16 @@ type DependencyHealth = {
   generatedAt: string;
 };
 
-type BootstrapRun = {
-  summary: RunSummary;
-  cancelled: boolean;
-  leaseId: string | null;
+type WorkerTarget = WorkerPodTarget & { kind: 'pod' | 'service' };
+type WorkerSource = { target: WorkerTarget; runtime: WorkerRuntime; assignments: WorkerAssignment[] };
+type WorkerAssignmentRef = { target: WorkerTarget; assignment: WorkerAssignment };
+type BootstrapRun = { summary: RunSummary; cancelled: boolean; leaseId: string | null };
+type RunPlan = {
+  input: RunDraftInput;
+  shardSize: number;
+  workerShards: number;
+  targetWorkerReplicas: number;
+  leasedIdentities: number;
 };
 
 type ServiceDefinition = {
@@ -130,50 +137,60 @@ type DemandSnapshot = {
 export class ControlPlaneService {
   private readonly workerOrigin = process.env.WORKER_SERVICE_ORIGIN ?? 'http://localhost:7400';
   private readonly mockUserOrigin = process.env.MOCK_USER_SERVICE_ORIGIN ?? 'http://localhost:7500';
+  private readonly workerController = new KubernetesWorkerController();
   private readonly bootstrapRuns = new Map<string, BootstrapRun>();
+  private readonly runPlans = new Map<string, RunPlan>();
+
+  private readonly planner: LoadPlannerConfig = {
+    workerShardSize: Number(process.env.WORKER_SHARD_SIZE ?? 250),
+    identityReuseFactor: Number(process.env.IDENTITY_REUSE_FACTOR ?? 25),
+    workerMinReplicas: Number(process.env.WORKER_MIN_REPLICAS ?? this.workerController.minReplicas),
+    workerMaxReplicas: Number(process.env.WORKER_MAX_REPLICAS ?? this.workerController.maxReplicas),
+    maxVirtualUsers: Number(process.env.MAX_VIRTUAL_USERS ?? 10_000)
+  };
 
   private readonly architecture: ArchitectureStage[] = [
     {
       id: 'ui',
       title: 'Angular control center',
-      summary: 'Operators compose runs, bias the realistic user engine, and monitor staging in one place.',
+      summary: 'Operators compose runs, preview shard plans, and monitor the autoscaled worker plane in one place.',
       bullets: [
-        'Run builder with safe defaults',
-        'Live run, scaling and user-capacity views',
+        'Run builder shows shard count, leased identities and requested worker replicas',
+        'The entered virtual user count remains operator-defined',
         'All traffic remains scoped to staging'
       ],
       tone: 'ui'
     },
     {
       id: 'control',
-      title: 'Node orchestrator and user registry',
-      summary: 'The orchestrator now coordinates the Spring mock-user-service for leases before dispatching work.',
+      title: 'Node orchestrator and planner',
+      summary: 'The orchestrator leases only the staging identities it needs, requests worker scale, then dispatches shards across the cluster.',
       bullets: [
-        'Creates run ids and lease requests',
-        'Releases mock users when runs complete',
-        'Aggregates worker and user-capacity telemetry'
+        'Planner supports arbitrary volumes up to the configured ceiling',
+        'In-cluster scale control for worker-service',
+        'Shard telemetry is aggregated back into one run'
       ],
       tone: 'control'
     },
     {
       id: 'worker',
       title: 'Worker-service execution plane',
-      summary: 'Assignments run through one generic user engine with sessions, objectives and weighted actions.',
+      summary: 'The generic behavior engine runs on autoscaled worker pods and reuses leased staging identities within each shard.',
       bullets: [
         'Mixed HTTP and websocket behavior',
         'Private, group, media and social actions',
-        'Live runtime metrics for active assignments'
+        'Shard-ready execution distributed across pods'
       ],
       tone: 'worker'
     },
     {
       id: 'target',
       title: 'Staging business platform',
-      summary: 'The generated load targets the staging ingress and exposes replica, latency and scaling posture.',
+      summary: 'Generated traffic hits the staging ingress and exposes replica, latency and pressure signals across the business platform.',
       bullets: [
         'Frontend, gateway and realtime paths',
         'Messaging, group, media and notification pressure',
-        'HPA-style pressure view in the control plane'
+        'HPA-aware view of the target services'
       ],
       tone: 'target'
     }
@@ -191,100 +208,91 @@ export class ControlPlaneService {
   ];
 
   async health(): Promise<Record<string, unknown>> {
-    const [worker, mockUsers] = await Promise.all([
+    const [targets, worker, mockUsers] = await Promise.all([
+      this.listWorkerTargets(true),
       this.safeJson<DependencyHealth | null>(`${this.workerOrigin}/health`, null),
       this.safeJson<DependencyHealth | null>(`${this.mockUserOrigin}/health`, null)
     ]);
 
-    const status = worker && mockUsers ? 'ok' : 'degraded';
-
     return {
       service: 'orchestrator',
-      status,
+      status: mockUsers && (targets.length > 0 || worker) ? 'ok' : 'degraded',
       environment: 'staging',
+      planner: this.planner,
       dependencies: {
-        workerService: worker?.status ?? 'down',
-        mockUserService: mockUsers?.status ?? 'down'
+        workerService: worker?.status ?? (targets.length > 0 ? 'ok' : 'down'),
+        mockUserService: mockUsers?.status ?? 'down',
+        kubernetesWorkerController: this.workerController.enabled ? 'enabled' : 'disabled'
       },
       generatedAt: new Date().toISOString()
     };
   }
 
   async getSnapshot(): Promise<ControlPlaneSnapshot> {
-    const [workerRuntime, workerAssignments, userRuntime, fixtures, leases] = await Promise.all([
-      this.safeJson<WorkerRuntime>(`${this.workerOrigin}/api/v1/worker/runtime`, {
-        service: 'worker-service',
-        generatedAt: new Date().toISOString(),
-        activeAssignments: 0,
-        runningUsers: 0,
-        connectedUsers: 0,
-        requestsPerSecond: 0,
-        messagesPerSecond: 0,
-        uploadsPerMinute: 0,
-        avgP95LatencyMs: 0
-      }),
-      this.safeJson<WorkerAssignment[]>(`${this.workerOrigin}/api/v1/worker/assignments`, []),
+    const [workerSources, userRuntime, fixtures, leases] = await Promise.all([
+      this.loadWorkerSources(),
       this.safeJson<MockUserRuntime | null>(`${this.mockUserOrigin}/api/v1/mock-users/runtime`, null),
       this.safeJson<FixtureProfile[]>(`${this.mockUserOrigin}/api/v1/mock-users/fixtures`, []),
       this.safeJson<LeaseRecord[]>(`${this.mockUserOrigin}/api/v1/mock-users/leases`, [])
     ]);
-
-    const activeCompletedRunIds = new Set(
-      workerAssignments
-        .filter((assignment) => assignment.status === 'completed' || assignment.status === 'failed')
-        .map((assignment) => assignment.runId)
-    );
+    const groupedAssignments = this.groupAssignments(workerSources);
+    const completedRunIds = Array.from(groupedAssignments.entries())
+      .filter(([, assignments]) => {
+        const status = this.resolveRunStatus(assignments);
+        return status === 'completed' || status === 'failed';
+      })
+      .map(([runId]) => runId);
 
     let currentLeases = leases;
-    if (leases.some((lease) => lease.state === 'active' && activeCompletedRunIds.has(lease.runId))) {
+    if (leases.some((lease) => lease.state === 'active' && completedRunIds.includes(lease.runId))) {
       await Promise.all(
         leases
-          .filter((lease) => lease.state === 'active' && activeCompletedRunIds.has(lease.runId))
+          .filter((lease) => lease.state === 'active' && completedRunIds.includes(lease.runId))
           .map((lease) =>
-            this.safeJson<LeaseRecord | null>(
+            this.safeJson(
               `${this.mockUserOrigin}/api/v1/mock-users/runs/${lease.runId}/release`,
               null,
               { method: 'POST' }
             )
           )
       );
-
       currentLeases = await this.safeJson<LeaseRecord[]>(
         `${this.mockUserOrigin}/api/v1/mock-users/leases`,
         leases
       );
     }
 
-    const activeWorkerRunIds = new Set(workerAssignments.map((assignment) => assignment.runId));
-    for (const [runId, bootstrapRun] of this.bootstrapRuns.entries()) {
-      if (
-        activeWorkerRunIds.has(runId) &&
-        (bootstrapRun.summary.status === 'running' || bootstrapRun.summary.status === 'completed')
-      ) {
-        this.bootstrapRuns.delete(runId);
-      }
-    }
-
     const runs = [
-      ...workerAssignments.map((assignment) => this.toRunSummary(assignment)),
-      ...Array.from(this.bootstrapRuns.values())
-        .map((bootstrapRun) => bootstrapRun.summary)
-        .filter((run) => !activeWorkerRunIds.has(run.id))
-    ]
-      .sort((left, right) => right.startedAt.localeCompare(left.startedAt));
+      ...Array.from(groupedAssignments.entries()).map(([runId, assignments]) =>
+        this.aggregateRunSummary(runId, assignments, currentLeases)
+      ),
+      ...Array.from(this.bootstrapRuns.entries())
+        .filter(([runId]) => !groupedAssignments.has(runId))
+        .map(([, bootstrapRun]) => bootstrapRun.summary)
+    ].sort((left, right) => right.startedAt.localeCompare(left.startedAt));
+
     const services = this.buildServices(runs);
-    const workerNodes = this.buildWorkerNodes(workerRuntime);
+    const workerNodes = this.buildWorkerNodes(workerSources);
+    const dashboard = this.buildDashboard(runs, services, workerSources, workerNodes);
+
+    if (
+      runs.every((run) => run.status !== 'running' && run.status !== 'paused') &&
+      this.workerController.enabled
+    ) {
+      void this.workerController.scaleWorkerDeployment(this.planner.workerMinReplicas).catch(() => undefined);
+    }
 
     return {
       architecture: this.architecture,
-      dashboard: this.buildDashboard(runs, services, workerNodes),
+      planner: this.planner,
+      dashboard,
       runs,
       services,
       workerNodes,
       userRuntime,
       fixtures,
       leases: currentLeases,
-      scalingEvents: this.buildScalingEvents(services, runs),
+      scalingEvents: this.buildScalingEvents(services, runs, workerSources),
       generatedAt: new Date().toISOString()
     };
   }
@@ -326,42 +334,55 @@ export class ControlPlaneService {
   }
 
   async startRun(input: RunDraftInput): Promise<RunSummary> {
-    const runId = `run-${crypto.randomUUID().slice(0, 8)}`;
-    const summary = this.createBootstrapSummary(runId, input);
-    this.bootstrapRuns.set(runId, {
-      summary,
-      cancelled: false,
-      leaseId: null
-    });
+    if (input.virtualUsers > this.planner.maxVirtualUsers) {
+      throw new Error(`Configured planner limit is ${this.planner.maxVirtualUsers} virtual users.`);
+    }
 
-    void this.bootstrapRun(runId, input);
+    const runId = `run-${crypto.randomUUID().slice(0, 8)}`;
+    const plan = this.buildRunPlan(input);
+    const summary = this.createBootstrapSummary(runId, plan);
+
+    this.runPlans.set(runId, plan);
+    this.bootstrapRuns.set(runId, { summary, cancelled: false, leaseId: null });
+
+    void this.bootstrapRun(runId, plan);
     return summary;
   }
 
   async pauseRun(runId: string): Promise<RunSummary | null> {
-    const assignment = await this.findAssignmentByRunId(runId);
-    if (!assignment) {
+    const assignments = await this.findAssignmentsByRunId(runId);
+    if (assignments.length === 0) {
       return null;
     }
 
-    const paused = await this.httpJson<WorkerAssignment>(
-      `${this.workerOrigin}/api/v1/worker/assignments/${assignment.id}/pause`,
-      { method: 'POST' }
+    await Promise.all(
+      assignments.map((assignment) =>
+        this.httpJson(
+          `${assignment.target.baseUrl}/api/v1/worker/assignments/${assignment.assignment.id}/pause`,
+          { method: 'POST' }
+        )
+      )
     );
-    return this.toRunSummary(paused);
+
+    return (await this.getSnapshot()).runs.find((run) => run.id === runId) ?? null;
   }
 
   async resumeRun(runId: string): Promise<RunSummary | null> {
-    const assignment = await this.findAssignmentByRunId(runId);
-    if (!assignment) {
+    const assignments = await this.findAssignmentsByRunId(runId);
+    if (assignments.length === 0) {
       return null;
     }
 
-    const resumed = await this.httpJson<WorkerAssignment>(
-      `${this.workerOrigin}/api/v1/worker/assignments/${assignment.id}/resume`,
-      { method: 'POST' }
+    await Promise.all(
+      assignments.map((assignment) =>
+        this.httpJson(
+          `${assignment.target.baseUrl}/api/v1/worker/assignments/${assignment.assignment.id}/resume`,
+          { method: 'POST' }
+        )
+      )
     );
-    return this.toRunSummary(resumed);
+
+    return (await this.getSnapshot()).runs.find((run) => run.id === runId) ?? null;
   }
 
   async stopRun(runId: string): Promise<RunSummary | null> {
@@ -379,7 +400,7 @@ export class ControlPlaneService {
             timestamp: new Date().toISOString(),
             severity: 'warning' as const,
             title: 'Run bootstrap cancelled',
-            detail: 'Provisioning was cancelled before worker assignment dispatch completed.'
+            detail: 'Provisioning was cancelled before worker shard dispatch completed.'
           },
           ...bootstrapRun.summary.events
         ].slice(0, 10)
@@ -387,33 +408,34 @@ export class ControlPlaneService {
       return bootstrapRun.summary;
     }
 
-    const assignment = await this.findAssignmentByRunId(runId);
-    if (!assignment) {
+    const assignments = await this.findAssignmentsByRunId(runId);
+    if (assignments.length === 0) {
       return null;
     }
 
-    const stopped = await this.httpJson<WorkerAssignment>(
-      `${this.workerOrigin}/api/v1/worker/assignments/${assignment.id}/stop`,
-      { method: 'POST' }
+    await Promise.all(
+      assignments.map((assignment) =>
+        this.httpJson(
+          `${assignment.target.baseUrl}/api/v1/worker/assignments/${assignment.assignment.id}/stop`,
+          { method: 'POST' }
+        )
+      )
     );
-    await this.safeJson(
-      `${this.mockUserOrigin}/api/v1/mock-users/runs/${runId}/release`,
-      null,
-      { method: 'POST' }
-    );
-    return this.toRunSummary(stopped);
+
+    await this.safeJson(`${this.mockUserOrigin}/api/v1/mock-users/runs/${runId}/release`, null, {
+      method: 'POST'
+    });
+
+    if (this.workerController.enabled) {
+      await this.workerController.scaleWorkerDeployment(this.planner.workerMinReplicas).catch(() => undefined);
+    }
+
+    return (await this.getSnapshot()).runs.find((run) => run.id === runId) ?? null;
   }
 
-  private async findAssignmentByRunId(runId: string): Promise<WorkerAssignment | null> {
-    const assignments = await this.safeJson<WorkerAssignment[]>(
-      `${this.workerOrigin}/api/v1/worker/assignments`,
-      []
-    );
-    return assignments.find((assignment) => assignment.runId === runId) ?? null;
-  }
-
-  private async bootstrapRun(runId: string, input: RunDraftInput): Promise<void> {
+  private async bootstrapRun(runId: string, plan: RunPlan): Promise<void> {
     let leaseId: string | null = null;
+    const createdAssignments: Array<{ target: WorkerTarget; assignmentId: string }> = [];
 
     try {
       this.updateBootstrapRun(runId, (summary) => ({
@@ -421,11 +443,11 @@ export class ControlPlaneService {
         updatedAt: new Date().toISOString(),
         events: [
           {
-            id: `bootstrap-start-${crypto.randomUUID().slice(0, 8)}`,
+            id: `bootstrap-plan-${crypto.randomUUID().slice(0, 8)}`,
             timestamp: new Date().toISOString(),
             severity: 'info' as const,
-            title: 'Provisioning mock users',
-            detail: `Allocating ${input.virtualUsers} staging-backed mock users before worker dispatch.`
+            title: 'Run plan prepared',
+            detail: `Planning ${plan.workerShards} shards, ${plan.leasedIdentities} leased identities, and ${plan.targetWorkerReplicas} target worker replicas for ${plan.input.virtualUsers} virtual users.`
           },
           ...summary.events
         ].slice(0, 10)
@@ -438,10 +460,10 @@ export class ControlPlaneService {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             runId,
-            runName: input.runName,
-            environment: input.environment,
-            requestedUsers: input.virtualUsers,
-            weights: input.weights
+            runName: plan.input.runName,
+            environment: plan.input.environment,
+            requestedUsers: plan.leasedIdentities,
+            weights: plan.input.weights
           })
         },
         900_000
@@ -454,68 +476,102 @@ export class ControlPlaneService {
         return;
       }
 
-      bootstrapRun.leaseId = lease.lease.id;
+      bootstrapRun.leaseId = leaseId;
       if (bootstrapRun.cancelled) {
         await this.releaseRunLease(runId);
         return;
       }
+      let workerTargets = await this.listWorkerTargets(true);
+      if (this.workerController.enabled) {
+        this.updateBootstrapRun(runId, (summary) => ({
+          ...summary,
+          updatedAt: new Date().toISOString(),
+          events: [
+            {
+              id: `bootstrap-scale-${crypto.randomUUID().slice(0, 8)}`,
+              timestamp: new Date().toISOString(),
+              severity: 'info' as const,
+              title: 'Scaling worker-service',
+              detail: `Requesting ${plan.targetWorkerReplicas} worker replicas before shard dispatch.`
+            },
+            ...summary.events
+          ].slice(0, 10)
+        }));
 
-      this.updateBootstrapRun(runId, (summary) => ({
-        ...summary,
-        updatedAt: new Date().toISOString(),
-        events: [
+        await this.workerController.scaleWorkerDeployment(plan.targetWorkerReplicas);
+        workerTargets = (
+          await this.workerController.waitForReadyWorkerPods(plan.targetWorkerReplicas, 300_000)
+        ).map((pod) => ({
+          ...pod,
+          kind: 'pod' as const
+        }));
+      }
+
+      if (workerTargets.length === 0) {
+        throw new Error('No ready worker-service targets were available to receive shard assignments.');
+      }
+
+      const shardSizes = this.splitVirtualUsers(plan.input.virtualUsers, plan.workerShards);
+      const identityBuckets = this.partitionAssignedUsers(lease.assignedUsers, plan.workerShards);
+
+      for (let index = 0; index < shardSizes.length; index += 1) {
+        const target = workerTargets[index % workerTargets.length]!;
+        const assignment = await this.httpJson<WorkerAssignment>(
+          `${target.baseUrl}/api/v1/worker/assignments`,
           {
-            id: `bootstrap-lease-${crypto.randomUUID().slice(0, 8)}`,
-            timestamp: new Date().toISOString(),
-            severity: 'success' as const,
-            title: 'Mock users allocated',
-            detail: `Lease ${lease.lease.id} allocated ${lease.assignedUsers.length} staging users. Dispatching worker assignment.`
-          },
-          ...summary.events
-        ].slice(0, 10)
-      }));
-
-      const assignment = await this.httpJson<WorkerAssignment>(`${this.workerOrigin}/api/v1/worker/assignments`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          runId,
-          assignmentLabel: input.runName,
-          environment: input.environment,
-          virtualUsers: lease.assignedUsers.length || input.virtualUsers,
-          durationSeconds: input.durationSeconds,
-          rampUpSeconds: input.rampUpSeconds,
-          thinkTimeMinMs: input.thinkTimeMinMs,
-          thinkTimeMaxMs: input.thinkTimeMaxMs,
-          initialOnlineRatio: input.initialOnlineRatio,
-          websocketRatio: input.websocketRatio,
-          avgSessionDurationSeconds: input.avgSessionDurationSeconds,
-          reconnectProbability: input.reconnectProbability,
-          weights: input.weights,
-          media: input.media,
-          targetBaseUrl: 'https://staging.uconnect.cc',
-          assignedUsers: lease.assignedUsers
-        })
-      });
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              runId,
+              assignmentLabel: plan.input.runName,
+              environment: plan.input.environment,
+              virtualUsers: shardSizes[index],
+              durationSeconds: plan.input.durationSeconds,
+              rampUpSeconds: plan.input.rampUpSeconds,
+              thinkTimeMinMs: plan.input.thinkTimeMinMs,
+              thinkTimeMaxMs: plan.input.thinkTimeMaxMs,
+              initialOnlineRatio: plan.input.initialOnlineRatio,
+              websocketRatio: plan.input.websocketRatio,
+              avgSessionDurationSeconds: plan.input.avgSessionDurationSeconds,
+              reconnectProbability: plan.input.reconnectProbability,
+              weights: plan.input.weights,
+              media: plan.input.media,
+              targetBaseUrl: 'https://staging.uconnect.cc',
+              assignedUsers: identityBuckets[index]
+            })
+          }
+        );
+        createdAssignments.push({ target, assignmentId: assignment.id });
+      }
 
       this.bootstrapRuns.set(runId, {
         summary: {
-          ...this.toRunSummary(assignment),
-            events: [
-              {
-                id: `bootstrap-dispatch-${crypto.randomUUID().slice(0, 8)}`,
-                timestamp: new Date().toISOString(),
-                severity: 'success' as const,
-                title: 'Worker assignment dispatched',
-                detail: `Assignment ${assignment.id} is now executing against staging.`
-              },
-            ...this.toRunSummary(assignment).events
-          ].slice(0, 10)
+          ...this.createBootstrapSummary(runId, plan),
+          progressPercent: 1,
+          updatedAt: new Date().toISOString(),
+          events: [
+            {
+              id: `bootstrap-dispatch-${crypto.randomUUID().slice(0, 8)}`,
+              timestamp: new Date().toISOString(),
+              severity: 'success' as const,
+              title: 'Worker shards dispatched',
+              detail: `${plan.workerShards} shards are executing across ${workerTargets.length} ready worker pods.`
+            }
+          ]
         },
         cancelled: false,
         leaseId
       });
     } catch (error) {
+      await Promise.all(
+        createdAssignments.map((assignment) =>
+          this.safeJson(
+            `${assignment.target.baseUrl}/api/v1/worker/assignments/${assignment.assignmentId}/stop`,
+            null,
+            { method: 'POST' }
+          )
+        )
+      );
       if (leaseId) {
         await this.releaseRunLease(runId);
       }
@@ -539,12 +595,34 @@ export class ControlPlaneService {
     }
   }
 
-  private createBootstrapSummary(runId: string, input: RunDraftInput): RunSummary {
+  private buildRunPlan(input: RunDraftInput): RunPlan {
+    const shardSize = Math.max(1, this.planner.workerShardSize);
+    const workerShards = Math.max(1, Math.ceil(input.virtualUsers / shardSize));
+    const targetWorkerReplicas = this.clamp(
+      workerShards,
+      this.planner.workerMinReplicas,
+      this.planner.workerMaxReplicas
+    );
+    const leasedIdentities = Math.min(
+      input.virtualUsers,
+      Math.max(
+        targetWorkerReplicas,
+        Math.ceil(input.virtualUsers / Math.max(1, this.planner.identityReuseFactor))
+      )
+    );
+
+    return { input, shardSize, workerShards, targetWorkerReplicas, leasedIdentities };
+  }
+
+  private createBootstrapSummary(runId: string, plan: RunPlan): RunSummary {
     const timestamp = new Date().toISOString();
     return {
-      ...input,
+      ...plan.input,
       id: runId,
       status: 'running',
+      leasedIdentities: plan.leasedIdentities,
+      workerShards: plan.workerShards,
+      targetWorkerReplicas: plan.targetWorkerReplicas,
       startedAt: timestamp,
       updatedAt: timestamp,
       elapsedSeconds: 0,
@@ -557,14 +635,14 @@ export class ControlPlaneService {
       uploadsPerMinute: 0,
       errorRate: 0,
       p95LatencyMs: 0,
-      topServices: this.pickTopServices(input.weights),
+      topServices: this.pickTopServices(plan.input.weights),
       events: [
         {
           id: `bootstrap-queued-${crypto.randomUUID().slice(0, 8)}`,
           timestamp,
-          severity: 'info' as const,
+          severity: 'info',
           title: 'Run accepted',
-          detail: `Run ${input.runName} was accepted and queued for staging user provisioning.`
+          detail: `Run ${plan.input.runName} was accepted and queued for ${plan.workerShards} worker shards.`
         }
       ],
       milestoneIndex: 0
@@ -581,14 +659,148 @@ export class ControlPlaneService {
   }
 
   private async releaseRunLease(runId: string): Promise<void> {
-    await this.safeJson(
-      `${this.mockUserOrigin}/api/v1/mock-users/runs/${runId}/release`,
-      null,
-      { method: 'POST' }
+    await this.safeJson(`${this.mockUserOrigin}/api/v1/mock-users/runs/${runId}/release`, null, {
+      method: 'POST'
+    });
+  }
+
+  private async listWorkerTargets(preferReady: boolean): Promise<WorkerTarget[]> {
+    if (!this.workerController.enabled) {
+      return [this.syntheticWorkerTarget()];
+    }
+    const pods = await this.workerController.listWorkerPods();
+    const targets = (preferReady ? pods.filter((pod) => pod.ready) : pods).map((pod) => ({
+      ...pod,
+      kind: 'pod' as const
+    }));
+    return targets.length > 0 ? targets : [];
+  }
+
+  private async loadWorkerSources(): Promise<WorkerSource[]> {
+    const targets = await this.listWorkerTargets(false);
+    const effectiveTargets = targets.length > 0 ? targets : [this.syntheticWorkerTarget()];
+    return Promise.all(
+      effectiveTargets.map(async (target) => ({
+        target,
+        runtime: await this.safeJson(`${target.baseUrl}/api/v1/worker/runtime`, this.emptyWorkerRuntime()),
+        assignments: await this.safeJson(`${target.baseUrl}/api/v1/worker/assignments`, [])
+      }))
     );
   }
 
-  private toRunSummary(assignment: WorkerAssignment): RunSummary {
+  private syntheticWorkerTarget(): WorkerTarget {
+    return {
+      name: 'worker-service',
+      podIp: '',
+      nodeName: 'service-mesh',
+      zone: 'service',
+      ready: true,
+      baseUrl: this.workerOrigin,
+      kind: 'service'
+    };
+  }
+
+  private emptyWorkerRuntime(): WorkerRuntime {
+    return {
+      service: 'worker-service',
+      generatedAt: new Date().toISOString(),
+      activeAssignments: 0,
+      runningUsers: 0,
+      connectedUsers: 0,
+      requestsPerSecond: 0,
+      messagesPerSecond: 0,
+      uploadsPerMinute: 0,
+      avgP95LatencyMs: 0
+    };
+  }
+
+  private groupAssignments(workerSources: WorkerSource[]): Map<string, WorkerAssignmentRef[]> {
+    const grouped = new Map<string, WorkerAssignmentRef[]>();
+    for (const source of workerSources) {
+      for (const assignment of source.assignments) {
+        const bucket = grouped.get(assignment.runId) ?? [];
+        bucket.push({ target: source.target, assignment });
+        grouped.set(assignment.runId, bucket);
+      }
+    }
+    return grouped;
+  }
+
+  private async findAssignmentsByRunId(runId: string): Promise<WorkerAssignmentRef[]> {
+    const workerSources = await this.loadWorkerSources();
+    return workerSources.flatMap((source) =>
+      source.assignments
+        .filter((assignment) => assignment.runId === runId)
+        .map((assignment) => ({ target: source.target, assignment }))
+    );
+  }
+
+  private aggregateRunSummary(runId: string, assignments: WorkerAssignmentRef[], leases: LeaseRecord[]): RunSummary {
+    const plan = this.runPlans.get(runId);
+    const first = assignments[0]!.assignment;
+    const input = plan?.input ?? this.draftFromAssignment(first);
+    const totalVirtualUsers = assignments.reduce((sum, item) => sum + item.assignment.virtualUsers, 0);
+    const weightBase = Math.max(totalVirtualUsers, 1);
+    const progressPercent = Math.round(
+      assignments.reduce((sum, item) => sum + item.assignment.progressPercent * item.assignment.virtualUsers, 0) /
+        weightBase
+    );
+    const recentEvents = assignments
+      .flatMap((item) => item.assignment.recentEvents)
+      .sort((left, right) => right.timestamp.localeCompare(left.timestamp))
+      .slice(0, 10)
+      .map((event) => this.toRunEvent(event));
+    const lease = leases
+      .filter((candidate) => candidate.runId === runId)
+      .sort((left, right) => right.issuedAt.localeCompare(left.issuedAt))[0];
+
+    return {
+      ...input,
+      id: runId,
+      status: this.resolveRunStatus(assignments),
+      leasedIdentities: plan?.leasedIdentities ?? lease?.users ?? totalVirtualUsers,
+      workerShards: plan?.workerShards ?? assignments.length,
+      targetWorkerReplicas:
+        plan?.targetWorkerReplicas ?? new Set(assignments.map((item) => item.target.name)).size,
+      startedAt: assignments.map((item) => item.assignment.startedAt).sort()[0]!,
+      updatedAt: assignments.map((item) => item.assignment.updatedAt).sort().reverse()[0]!,
+      elapsedSeconds: Math.max(...assignments.map((item) => item.assignment.elapsedSeconds)),
+      progressPercent,
+      activeUsers: assignments.reduce((sum, item) => sum + item.assignment.activeUsers, 0),
+      connectedUsers: assignments.reduce((sum, item) => sum + item.assignment.connectedUsers, 0),
+      openSockets: assignments.reduce((sum, item) => sum + item.assignment.connectedUsers, 0),
+      requestsPerSecond: this.round(
+        assignments.reduce((sum, item) => sum + item.assignment.requestsPerSecond, 0),
+        1
+      ),
+      messagesPerSecond: this.round(
+        assignments.reduce((sum, item) => sum + item.assignment.messagesPerSecond, 0),
+        1
+      ),
+      uploadsPerMinute: this.round(
+        assignments.reduce((sum, item) => sum + item.assignment.uploadsPerMinute, 0),
+        1
+      ),
+      errorRate: this.round(
+        assignments.reduce((sum, item) => sum + item.assignment.errorRate * item.assignment.virtualUsers, 0) /
+          weightBase,
+        3
+      ),
+      p95LatencyMs: Math.max(...assignments.map((item) => item.assignment.p95LatencyMs)),
+      topServices: this.pickTopServices(input.weights),
+      events: recentEvents,
+      milestoneIndex: [25, 50, 75, 100].filter((mark) => progressPercent >= mark).length
+    };
+  }
+
+  private resolveRunStatus(assignments: WorkerAssignmentRef[]): RunSummary['status'] {
+    if (assignments.some((item) => item.assignment.status === 'running')) return 'running';
+    if (assignments.some((item) => item.assignment.status === 'paused')) return 'paused';
+    if (assignments.some((item) => item.assignment.status === 'failed')) return 'failed';
+    return 'completed';
+  }
+
+  private draftFromAssignment(assignment: WorkerAssignment): RunDraftInput {
     return {
       runName: assignment.assignmentLabel,
       environment: assignment.environment,
@@ -604,28 +816,27 @@ export class ControlPlaneService {
       weights: assignment.weights,
       media: assignment.media,
       limits: {
-        maxConcurrentActions: Math.max(assignment.virtualUsers * 3, 32),
+        maxConcurrentActions: Math.max(Math.round(assignment.virtualUsers * 1.5), 100),
         stopOnHighErrorRate: true,
         errorRateThreshold: 0.2
-      },
-      id: assignment.runId,
-      status: assignment.status,
-      startedAt: assignment.startedAt,
-      updatedAt: assignment.updatedAt,
-      elapsedSeconds: assignment.elapsedSeconds,
-      progressPercent: assignment.progressPercent,
-      activeUsers: assignment.activeUsers,
-      connectedUsers: assignment.connectedUsers,
-      openSockets: assignment.connectedUsers,
-      requestsPerSecond: assignment.requestsPerSecond,
-      messagesPerSecond: assignment.messagesPerSecond,
-      uploadsPerMinute: assignment.uploadsPerMinute,
-      errorRate: assignment.errorRate,
-      p95LatencyMs: assignment.p95LatencyMs,
-      topServices: this.pickTopServices(assignment.weights),
-      events: assignment.recentEvents.slice(0, 10).map((event) => this.toRunEvent(event)),
-      milestoneIndex: [25, 50, 75, 100].filter((mark) => assignment.progressPercent >= mark).length
+      }
     };
+  }
+
+  private splitVirtualUsers(totalUsers: number, shardCount: number): number[] {
+    const base = Math.floor(totalUsers / shardCount);
+    const remainder = totalUsers % shardCount;
+    return Array.from({ length: shardCount }, (_, index) => base + (index < remainder ? 1 : 0));
+  }
+
+  private partitionAssignedUsers(assignedUsers: LeaseResponse['assignedUsers'], shardCount: number): LeaseResponse['assignedUsers'][] {
+    const buckets = Array.from({ length: shardCount }, () => [] as LeaseResponse['assignedUsers']);
+    assignedUsers.forEach((user, index) => {
+      buckets[index % shardCount]!.push(user);
+    });
+    return buckets.map((bucket, index) =>
+      bucket.length > 0 ? bucket : assignedUsers.length > 0 ? [assignedUsers[index % assignedUsers.length]!] : []
+    );
   }
 
   private toRunEvent(event: WorkerAssignment['recentEvents'][number]): RunEvent {
@@ -637,18 +848,10 @@ export class ControlPlaneService {
         : event.userId === 'system' && event.action === 'logout'
           ? 'warning'
           : 'info';
-
     const title = event.userId === 'system'
       ? event.detail.replace(/^\[[^\]]+\]\s*/, '').split('.').at(0) ?? 'System event'
       : this.actionTitle(event.action);
-
-    return {
-      id: event.id,
-      timestamp: event.timestamp,
-      severity,
-      title,
-      detail: event.detail
-    };
+    return { id: event.id, timestamp: event.timestamp, severity, title, detail: event.detail };
   }
 
   private actionTitle(action: string): string {
@@ -679,9 +882,7 @@ export class ControlPlaneService {
 
     return pressures.map(({ definition, pressure }) => {
       const cpuPercent = Math.round(this.clamp(8 + pressure + Math.random() * 4, 5, 96));
-      const memoryPercent = Math.round(
-        this.clamp(20 + definition.minReplicas * 5 + pressure * 0.42 + Math.random() * 4, 12, 92)
-      );
+      const memoryPercent = Math.round(this.clamp(20 + definition.minReplicas * 5 + pressure * 0.42 + Math.random() * 4, 12, 92));
       const targetReplicas = this.clamp(
         Math.max(definition.minReplicas, Math.round(Math.max(cpuPercent / 23, memoryPercent / 32))),
         definition.minReplicas,
@@ -692,13 +893,6 @@ export class ControlPlaneService {
         definition.minReplicas,
         definition.maxReplicas
       );
-      const status =
-        targetReplicas !== currentReplicas
-          ? 'scaling'
-          : cpuPercent > 82 || memoryPercent > 82
-            ? 'attention'
-            : 'healthy';
-
       return {
         id: definition.id,
         name: definition.name,
@@ -712,65 +906,62 @@ export class ControlPlaneService {
         memoryPercent,
         requestRate: Math.round(pressure * 11),
         trafficShare: Math.round((pressure / totalPressure) * 100),
-        latestScaleAt: new Date(
-          Date.now() - (targetReplicas === currentReplicas ? 14 : 3) * 60_000
-        ).toISOString(),
+        latestScaleAt: new Date(Date.now() - (targetReplicas === currentReplicas ? 14 : 3) * 60_000).toISOString(),
         hpaState: targetReplicas === currentReplicas ? 'Steady' : currentReplicas < targetReplicas ? 'Scaling up' : 'Scaling down',
-        status,
+        status: targetReplicas !== currentReplicas ? 'scaling' : cpuPercent > 82 || memoryPercent > 82 ? 'attention' : 'healthy',
         series: this.buildReplicaSeries(currentReplicas, targetReplicas),
         note: definition.note
       };
     });
   }
 
-  private buildWorkerNodes(runtime: WorkerRuntime): WorkerNode[] {
-    const fractions = [0.34, 0.36, 0.3];
-    return ['load-worker-a', 'load-worker-b', 'load-worker-c'].map((name, index) => {
-      const assignedUsers = Math.round(runtime.runningUsers * fractions[index]!);
-      const podCount = Math.max(1, Math.round((runtime.activeAssignments + 1) * fractions[index]!));
-      const runningWorkers = Math.max(1, Math.round(Math.max(assignedUsers / 18, 1)));
-      const cpuPercent = Math.round(this.clamp(14 + assignedUsers * 0.22 + Math.random() * 6, 8, 96));
-      const memoryPercent = Math.round(this.clamp(18 + podCount * 8 + Math.random() * 5, 14, 94));
+  private buildWorkerNodes(workerSources: WorkerSource[]): WorkerNode[] {
+    const grouped = new Map<string, WorkerSource[]>();
+    for (const source of workerSources) {
+      const bucket = grouped.get(source.target.nodeName) ?? [];
+      bucket.push(source);
+      grouped.set(source.target.nodeName, bucket);
+    }
+
+    return Array.from(grouped.entries()).map(([nodeName, sources], index) => {
+      const assignedUsers = sources.reduce((sum, source) => sum + source.runtime.runningUsers, 0);
+      const runningWorkers = sources.reduce((sum, source) => sum + source.runtime.activeAssignments, 0);
+      const podCount = sources.length;
+      const requestsPerSecond = sources.reduce((sum, source) => sum + source.runtime.requestsPerSecond, 0);
+      const messagesPerSecond = sources.reduce((sum, source) => sum + source.runtime.messagesPerSecond, 0);
+      const cpuPercent = Math.round(this.clamp(6 + runningWorkers * 12 + assignedUsers * 0.05 + requestsPerSecond * 0.08 + messagesPerSecond * 0.6, 4, 96));
+      const memoryPercent = Math.round(this.clamp(12 + podCount * 8 + runningWorkers * 9 + assignedUsers * 0.03, 10, 94));
+      const status: WorkerNode['status'] =
+        cpuPercent > 84 || memoryPercent > 84 ? 'saturated' : cpuPercent > 58 ? 'warming' : 'healthy';
 
       return {
         id: `worker-node-${index + 1}`,
-        name,
-        status: cpuPercent > 84 || memoryPercent > 84 ? 'saturated' : cpuPercent > 58 ? 'warming' : 'healthy',
+        name: nodeName,
+        status,
         assignedUsers,
         runningWorkers,
         cpuPercent,
         memoryPercent,
-        queueLagMs: Math.round(this.clamp(20 + assignedUsers * 0.7, 12, 720)),
+        queueLagMs: Math.round(this.clamp(20 + assignedUsers * 0.35 + runningWorkers * 35, 18, 2400)),
         podCount,
-        zone: `edge-${String.fromCharCode(97 + index)}`
+        zone: sources[0]?.target.zone ?? nodeName
       };
-    });
+    }).sort((left, right) => right.podCount - left.podCount || left.name.localeCompare(right.name));
   }
 
-  private buildDashboard(
-    runs: RunSummary[],
-    services: ServiceScaling[],
-    workerNodes: WorkerNode[]
-  ): DashboardStats {
+  private buildDashboard(runs: RunSummary[], services: ServiceScaling[], workerSources: WorkerSource[], workerNodes: WorkerNode[]): DashboardStats {
     const liveRuns = runs.filter((run) => run.status === 'running');
-    const activeRuns = liveRuns.length;
-    const activeUsers = liveRuns.reduce((sum, run) => sum + run.activeUsers, 0);
-    const openSockets = liveRuns.reduce((sum, run) => sum + run.openSockets, 0);
-    const avgP95LatencyMs = liveRuns.length === 0
-      ? 0
-      : Math.round(liveRuns.reduce((sum, run) => sum + run.p95LatencyMs, 0) / liveRuns.length);
-
     return {
-      activeRuns,
-      activeUsers,
-      openSockets,
-      avgP95LatencyMs,
-      workerPods: workerNodes.reduce((sum, node) => sum + node.podCount, 0),
+      activeRuns: liveRuns.length,
+      activeUsers: liveRuns.reduce((sum, run) => sum + run.activeUsers, 0),
+      openSockets: liveRuns.reduce((sum, run) => sum + run.openSockets, 0),
+      avgP95LatencyMs: liveRuns.length === 0 ? 0 : Math.round(liveRuns.reduce((sum, run) => sum + run.p95LatencyMs, 0) / liveRuns.length),
+      workerPods: workerSources.length === 0 ? workerNodes.reduce((sum, node) => sum + node.podCount, 0) : workerSources.length,
       deployedServices: services.length
     };
   }
 
-  private buildScalingEvents(services: ServiceScaling[], runs: RunSummary[]): ScalingEvent[] {
+  private buildScalingEvents(services: ServiceScaling[], runs: RunSummary[], workerSources: WorkerSource[]): ScalingEvent[] {
     const serviceEvents = services
       .filter((service) => service.currentReplicas !== service.targetReplicas || service.status === 'attention')
       .slice(0, 6)
@@ -781,36 +972,30 @@ export class ControlPlaneService {
         serviceName: service.name,
         detail: `Replicas are at ${service.currentReplicas}/${service.targetReplicas}; CPU ${service.cpuPercent}% and memory ${service.memoryPercent}%.`
       }));
-
     const runEvents = runs
       .filter((run) => run.status === 'running')
-      .slice(0, 3)
+      .slice(0, 4)
       .map((run) => ({
         id: `run-${run.id}`,
         timestamp: run.updatedAt,
         severity: 'info' as const,
         serviceName: run.runName,
-        detail: `${run.activeUsers} active users, ${run.messagesPerSecond} msg/s, ${run.uploadsPerMinute} uploads/min.`
+        detail: `${run.workerShards} shards, ${run.targetWorkerReplicas} target workers, ${run.activeUsers} active users, ${run.messagesPerSecond} msg/s.`
       }));
-
-    return [...serviceEvents, ...runEvents]
+    const workerEvents = workerSources.slice(0, 4).map((source) => ({
+      id: `worker-${source.target.name}`,
+      timestamp: source.runtime.generatedAt,
+      severity: source.runtime.activeAssignments > 0 ? 'success' as const : 'info' as const,
+      serviceName: source.target.name,
+      detail: `${source.runtime.activeAssignments} shard assignments, ${source.runtime.runningUsers} running users, ${source.runtime.requestsPerSecond} req/s.`
+    }));
+    return [...serviceEvents, ...runEvents, ...workerEvents]
       .sort((left, right) => right.timestamp.localeCompare(left.timestamp))
       .slice(0, 12);
   }
 
   private aggregateDemand(runs: RunSummary[]): DemandSnapshot {
-    const totalWeight = runs.reduce(
-      (sum, run) =>
-        sum +
-        run.weights.browse +
-        run.weights.privateMessage +
-        run.weights.group +
-        run.weights.media +
-        run.weights.social +
-        run.weights.notificationCheck,
-      0
-    );
-
+    const totalWeight = runs.reduce((sum, run) => sum + run.weights.browse + run.weights.privateMessage + run.weights.group + run.weights.media + run.weights.social + run.weights.notificationCheck, 0);
     return {
       activeUsers: runs.reduce((sum, run) => sum + run.activeUsers, 0),
       connectedUsers: runs.reduce((sum, run) => sum + run.connectedUsers, 0),
@@ -824,30 +1009,19 @@ export class ControlPlaneService {
 
   private pressureFor(focus: ServiceScaling['focus'], demand: DemandSnapshot): number {
     switch (focus) {
-      case 'frontend':
-        return demand.requestsPerSecond * 0.12 + demand.activeUsers * 0.03;
-      case 'gateway':
-        return demand.requestsPerSecond * 0.17 + demand.connectedUsers * 0.015;
-      case 'realtime':
-        return demand.connectedUsers * 0.08 + demand.messagesPerSecond * 4.2;
-      case 'chat':
-        return demand.messagesPerSecond * 7.4 + demand.activeUsers * 0.02;
-      case 'group':
-        return demand.groupWeight * demand.activeUsers * 0.05 + demand.messagesPerSecond * 3.2;
-      case 'media':
-        return demand.uploadsPerMinute * 14 + demand.requestsPerSecond * 0.03;
-      case 'notifications':
-        return demand.messagesPerSecond * 4.8 + demand.socialWeight * demand.activeUsers * 0.03;
-      case 'identity':
-        return demand.socialWeight * demand.activeUsers * 0.035 + demand.requestsPerSecond * 0.025;
+      case 'frontend': return demand.requestsPerSecond * 0.12 + demand.activeUsers * 0.03;
+      case 'gateway': return demand.requestsPerSecond * 0.17 + demand.connectedUsers * 0.015;
+      case 'realtime': return demand.connectedUsers * 0.08 + demand.messagesPerSecond * 4.2;
+      case 'chat': return demand.messagesPerSecond * 7.4 + demand.activeUsers * 0.02;
+      case 'group': return demand.groupWeight * demand.activeUsers * 0.05 + demand.messagesPerSecond * 3.2;
+      case 'media': return demand.uploadsPerMinute * 14 + demand.requestsPerSecond * 0.03;
+      case 'notifications': return demand.messagesPerSecond * 4.8 + demand.socialWeight * demand.activeUsers * 0.03;
+      case 'identity': return demand.socialWeight * demand.activeUsers * 0.035 + demand.requestsPerSecond * 0.025;
     }
   }
 
   private buildReplicaSeries(currentReplicas: number, targetReplicas: number): number[] {
-    return Array.from({ length: 12 }, (_unused, index) => {
-      const offset = index < 8 ? -1 : 0;
-      return Math.max(1, currentReplicas + offset + (index === 11 ? targetReplicas - currentReplicas : 0));
-    });
+    return Array.from({ length: 12 }, (_, index) => Math.max(1, currentReplicas + (index < 8 ? -1 : 0) + (index === 11 ? targetReplicas - currentReplicas : 0)));
   }
 
   private pickTopServices(weights: BehaviorWeights): string[] {
@@ -857,27 +1031,19 @@ export class ControlPlaneService {
       { name: 'media-service', value: weights.media },
       { name: 'notification-service', value: weights.notificationCheck + weights.social },
       { name: 'user-service', value: weights.social + weights.browse / 2 }
-    ]
-      .sort((left, right) => right.value - left.value)
-      .slice(0, 3)
-      .map((entry) => entry.name);
+    ].sort((left, right) => right.value - left.value).slice(0, 3).map((entry) => entry.name);
   }
 
   private async httpJson<T>(url: string, init?: RequestInit, timeoutMs = 10_000): Promise<T> {
     const response = await fetch(url, {
       ...init,
-      headers: {
-        Accept: 'application/json',
-        ...(init?.headers ?? {})
-      },
+      headers: { Accept: 'application/json', ...(init?.headers ?? {}) },
       signal: AbortSignal.timeout(timeoutMs)
     });
-
     if (!response.ok) {
       const message = await response.text();
       throw new Error(`${response.status} ${response.statusText} from ${url}: ${message}`);
     }
-
     return response.json() as Promise<T>;
   }
 
@@ -891,5 +1057,10 @@ export class ControlPlaneService {
 
   private clamp(value: number, min: number, max: number): number {
     return Math.min(Math.max(value, min), max);
+  }
+
+  private round(value: number, digits: number): number {
+    const factor = 10 ** digits;
+    return Math.round(value * factor) / factor;
   }
 }
