@@ -118,7 +118,9 @@ export class ControlPlaneStore {
 
     try {
       const run = await firstValueFrom(this.api.startRun(payload));
-      await this.reload();
+      this.upsertRun(run);
+      this.errorMessage.set(null);
+      void this.reload(true);
       return run;
     } catch (error) {
       this.errorMessage.set(this.describeError(error, 'Unable to start run'));
@@ -170,13 +172,28 @@ export class ControlPlaneStore {
     this.pendingRunId.set(runId);
 
     try {
-      await firstValueFrom(action());
-      await this.reload();
+      const run = await firstValueFrom(action());
+      this.upsertRun(run);
+      this.errorMessage.set(null);
+      void this.reload(true);
     } catch (error) {
       this.errorMessage.set(this.describeError(error, 'Unable to update run'));
     } finally {
       this.pendingRunId.set(null);
     }
+  }
+
+  private upsertRun(run: RunSummary): void {
+    const snapshot = this.snapshot();
+    if (!snapshot) {
+      return;
+    }
+
+    const remainingRuns = snapshot.runs.filter((candidate) => candidate.id !== run.id);
+    this.snapshot.set({
+      ...snapshot,
+      runs: [run, ...remainingRuns].sort((left, right) => right.startedAt.localeCompare(left.startedAt))
+    });
   }
 
   private describeError(error: unknown, fallback: string): string {

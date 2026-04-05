@@ -359,16 +359,16 @@ export class ControlPlaneService {
       return null;
     }
 
-    await Promise.all(
+    const updatedAssignments = await Promise.all(
       assignments.map((assignment) =>
-        this.httpJson(
+        this.httpJson<WorkerAssignment>(
           `${assignment.target.baseUrl}/api/v1/worker/assignments/${assignment.assignment.id}/pause`,
           { method: 'POST' }
-        )
+        ).then((updatedAssignment) => ({ target: assignment.target, assignment: updatedAssignment }))
       )
     );
 
-    return (await this.getSnapshot()).runs.find((run) => run.id === runId) ?? null;
+    return this.summarizeAssignments(runId, updatedAssignments);
   }
 
   async resumeRun(runId: string): Promise<RunSummary | null> {
@@ -377,16 +377,16 @@ export class ControlPlaneService {
       return null;
     }
 
-    await Promise.all(
+    const updatedAssignments = await Promise.all(
       assignments.map((assignment) =>
-        this.httpJson(
+        this.httpJson<WorkerAssignment>(
           `${assignment.target.baseUrl}/api/v1/worker/assignments/${assignment.assignment.id}/resume`,
           { method: 'POST' }
-        )
+        ).then((updatedAssignment) => ({ target: assignment.target, assignment: updatedAssignment }))
       )
     );
 
-    return (await this.getSnapshot()).runs.find((run) => run.id === runId) ?? null;
+    return this.summarizeAssignments(runId, updatedAssignments);
   }
 
   async stopRun(runId: string): Promise<RunSummary | null> {
@@ -417,12 +417,12 @@ export class ControlPlaneService {
       return null;
     }
 
-    await Promise.all(
+    const updatedAssignments = await Promise.all(
       assignments.map((assignment) =>
-        this.httpJson(
+        this.httpJson<WorkerAssignment>(
           `${assignment.target.baseUrl}/api/v1/worker/assignments/${assignment.assignment.id}/stop`,
           { method: 'POST' }
-        )
+        ).then((updatedAssignment) => ({ target: assignment.target, assignment: updatedAssignment }))
       )
     );
 
@@ -430,7 +430,7 @@ export class ControlPlaneService {
       method: 'POST'
     });
 
-    return (await this.getSnapshot()).runs.find((run) => run.id === runId) ?? null;
+    return this.summarizeAssignments(runId, updatedAssignments);
   }
 
   private async bootstrapRun(runId: string, plan: RunPlan): Promise<void> {
@@ -669,6 +669,17 @@ export class ControlPlaneService {
     await this.safeJson(`${this.mockUserOrigin}/api/v1/mock-users/runs/${runId}/release`, null, {
       method: 'POST'
     });
+  }
+
+  private async summarizeAssignments(
+    runId: string,
+    assignments: WorkerAssignmentRef[]
+  ): Promise<RunSummary> {
+    const leases = await this.safeJson<LeaseRecord[]>(
+      `${this.mockUserOrigin}/api/v1/mock-users/leases`,
+      []
+    );
+    return this.aggregateRunSummary(runId, assignments, leases);
   }
 
   private async listWorkerTargets(preferReady: boolean): Promise<WorkerTarget[]> {
