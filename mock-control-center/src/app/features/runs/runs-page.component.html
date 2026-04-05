@@ -13,7 +13,7 @@
       <button class="btn btn-secondary" type="button" (click)="applyPreset('balanced')">Balanced</button>
       <button class="btn btn-secondary" type="button" (click)="applyPreset('conversation')">Conversation wave</button>
       <button class="btn btn-secondary" type="button" (click)="applyPreset('attachments')">Attachment burst</button>
-      <button class="btn btn-secondary" type="button" (click)="applyPreset('validation10k')">10k validation</button>
+      <button class="btn btn-secondary" type="button" (click)="applyPreset('validation10k')">High-volume example</button>
     </div>
   </article>
 
@@ -39,6 +39,7 @@
         <label class="field">
           <span>Virtual users</span>
           <input type="number" formControlName="virtualUsers" min="1" [max]="planner().maxVirtualUsers" />
+          <small class="muted">Choose any volume up to the current ceiling of {{ planner().maxVirtualUsers }} users.</small>
         </label>
         <label class="field">
           <span>Duration (s)</span>
@@ -170,7 +171,7 @@
           <div><strong>{{ plannedRun().usersPerShard }}</strong><span>users / shard</span></div>
           <div><strong>{{ plannedRun().identitiesPerShard }}</strong><span>identities / shard</span></div>
           <div><strong>{{ planner().workerShardSize }}</strong><span>planner shard size</span></div>
-          <div><strong>{{ planner().maxVirtualUsers }}</strong><span>configured ceiling</span></div>
+          <div><strong>{{ planner().maxVirtualUsers }}</strong><span>current ceiling</span></div>
         </div>
       </article>
 

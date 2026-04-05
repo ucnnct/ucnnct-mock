@@ -137,7 +137,7 @@ export class RunsPageComponent {
 
     if (preset === 'validation10k') {
       this.form.patchValue({
-        runName: 'staging-validation-10k',
+        runName: 'staging-high-volume-example',
         virtualUsers: 10_000,
         durationSeconds: 900,
         rampUpSeconds: 300,

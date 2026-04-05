@@ -279,7 +279,7 @@ export class ControlPlaneService {
       runs.every((run) => run.status !== 'running' && run.status !== 'paused') &&
       this.workerController.enabled
     ) {
-      void this.workerController.scaleWorkerDeployment(this.planner.workerMinReplicas).catch(() => undefined);
+      void this.workerController.restoreAutoscaling().catch(() => undefined);
     }
 
     return {
@@ -345,6 +345,10 @@ export class ControlPlaneService {
     this.runPlans.set(runId, plan);
     this.bootstrapRuns.set(runId, { summary, cancelled: false, leaseId: null });
 
+    console.info(
+      `[control-plane] accepted run ${runId} for ${plan.input.virtualUsers} users ` +
+        `(${plan.workerShards} shards / ${plan.targetWorkerReplicas} target workers / ${plan.leasedIdentities} identities)`
+    );
     void this.bootstrapRun(runId, plan);
     return summary;
   }
@@ -426,10 +430,6 @@ export class ControlPlaneService {
       method: 'POST'
     });
 
-    if (this.workerController.enabled) {
-      await this.workerController.scaleWorkerDeployment(this.planner.workerMinReplicas).catch(() => undefined);
-    }
-
     return (await this.getSnapshot()).runs.find((run) => run.id === runId) ?? null;
   }
 
@@ -491,14 +491,14 @@ export class ControlPlaneService {
               id: `bootstrap-scale-${crypto.randomUUID().slice(0, 8)}`,
               timestamp: new Date().toISOString(),
               severity: 'info' as const,
-              title: 'Scaling worker-service',
-              detail: `Requesting ${plan.targetWorkerReplicas} worker replicas before shard dispatch.`
+              title: 'Preparing worker capacity',
+              detail: `Raising worker autoscaling floor to ${plan.targetWorkerReplicas} replicas before shard dispatch.`
             },
             ...summary.events
           ].slice(0, 10)
         }));
 
-        await this.workerController.scaleWorkerDeployment(plan.targetWorkerReplicas);
+        await this.workerController.prepareWorkerCapacity(plan.targetWorkerReplicas);
         workerTargets = (
           await this.workerController.waitForReadyWorkerPods(plan.targetWorkerReplicas, 300_000)
         ).map((pod) => ({
@@ -562,6 +562,9 @@ export class ControlPlaneService {
         cancelled: false,
         leaseId
       });
+      console.info(
+        `[control-plane] dispatched ${plan.workerShards} shards for run ${runId} across ${workerTargets.length} workers`
+      );
     } catch (error) {
       await Promise.all(
         createdAssignments.map((assignment) =>
@@ -576,6 +579,10 @@ export class ControlPlaneService {
         await this.releaseRunLease(runId);
       }
 
+      console.error(
+        `[control-plane] bootstrap failed for ${runId}:`,
+        error instanceof Error ? error.message : error
+      );
       this.updateBootstrapRun(runId, (summary) => ({
         ...summary,
         status: 'failed',

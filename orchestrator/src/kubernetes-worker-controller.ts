@@ -33,6 +33,7 @@ type PodListResponse = {
 export class KubernetesWorkerController {
   readonly namespace = process.env.K8S_NAMESPACE ?? 'ucnnct-mock';
   readonly deploymentName = process.env.WORKER_DEPLOYMENT_NAME ?? 'worker-service';
+  readonly hpaName = process.env.WORKER_HPA_NAME ?? this.deploymentName;
   readonly labelSelector = process.env.WORKER_LABEL_SELECTOR ?? 'app.kubernetes.io/name=worker-service';
   readonly minReplicas = Number(process.env.WORKER_MIN_REPLICAS ?? 2);
   readonly maxReplicas = Number(process.env.WORKER_MAX_REPLICAS ?? 40);
@@ -124,6 +125,26 @@ export class KubernetesWorkerController {
     );
   }
 
+  async prepareWorkerCapacity(targetReplicas: number): Promise<number> {
+    if (!this.enabled) {
+      return 0;
+    }
+
+    const desiredReplicas = this.clamp(targetReplicas, this.minReplicas, this.maxReplicas);
+    await this.patchWorkerHpa(desiredReplicas, this.maxReplicas);
+    await this.scaleWorkerDeployment(desiredReplicas);
+    return desiredReplicas;
+  }
+
+  async restoreAutoscaling(): Promise<void> {
+    if (!this.enabled) {
+      return;
+    }
+
+    await this.patchWorkerHpa(this.minReplicas, this.maxReplicas);
+    await this.scaleWorkerDeployment(this.minReplicas);
+  }
+
   async waitForReadyWorkerPods(minReadyPods: number, timeoutMs = 180_000): Promise<WorkerPodTarget[]> {
     if (!this.enabled) {
       return [];
@@ -142,6 +163,29 @@ export class KubernetesWorkerController {
     }
 
     return latestTargets;
+  }
+
+  private async patchWorkerHpa(minReplicas: number, maxReplicas: number): Promise<void> {
+    try {
+      await this.requestJson(
+        'PATCH',
+        `/apis/autoscaling/v2/namespaces/${this.namespace}/horizontalpodautoscalers/${this.hpaName}`,
+        {
+          spec: {
+            minReplicas: this.clamp(minReplicas, this.minReplicas, this.maxReplicas),
+            maxReplicas: this.clamp(maxReplicas, this.minReplicas, this.maxReplicas)
+          }
+        },
+        {
+          'Content-Type': 'application/merge-patch+json'
+        }
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!message.includes('404')) {
+        throw error;
+      }
+    }
   }
 
   private async requestJson<T>(
