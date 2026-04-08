@@ -1,8 +1,8 @@
 import { DestroyRef, Injectable, computed, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { HttpErrorResponse } from '@angular/common/http';
-import { EMPTY, firstValueFrom, interval } from 'rxjs';
-import { catchError, startWith } from 'rxjs/operators';
+import { EMPTY, Subscription, firstValueFrom, timer } from 'rxjs';
+import { catchError } from 'rxjs/operators';
 import {
   ApiState,
   ArchitectureStage,
@@ -25,6 +25,7 @@ export class ControlPlaneStore {
   private readonly api = inject(ControlPlaneApiService);
   private readonly destroyRef = inject(DestroyRef);
   private refreshInFlight = false;
+  private refreshLoop?: Subscription;
 
   readonly loading = signal(true);
   readonly apiState = signal<ApiState>('checking');
@@ -32,6 +33,7 @@ export class ControlPlaneStore {
   readonly errorMessage = signal<string | null>(null);
   readonly pendingRunId = signal<string | null>(null);
   readonly snapshot = signal<ControlPlaneSnapshot | null>(null);
+  readonly transientRuns = signal<Record<string, RunSummary>>({});
   readonly selectedLeaseId = signal<string | null>(null);
   readonly selectedLeaseDetail = signal<LeaseDetail | null>(null);
   readonly leaseDetailLoading = signal(false);
@@ -60,7 +62,17 @@ export class ControlPlaneStore {
       }
     );
   });
-  readonly runs = computed<RunSummary[]>(() => this.snapshot()?.runs ?? []);
+  readonly runs = computed<RunSummary[]>(() => {
+    const snapshotRuns = this.snapshot()?.runs ?? [];
+    const transientRuns = Object.values(this.transientRuns());
+    const merged = new Map(snapshotRuns.map((run) => [run.id, run]));
+
+    for (const run of transientRuns) {
+      merged.set(run.id, run);
+    }
+
+    return [...merged.values()].sort((left, right) => right.startedAt.localeCompare(left.startedAt));
+  });
   readonly services = computed<ServiceScaling[]>(() => this.snapshot()?.services ?? []);
   readonly workerNodes = computed<WorkerNode[]>(() => this.snapshot()?.workerNodes ?? []);
   readonly userRuntime = computed<MockUserRuntime | null>(() => this.snapshot()?.userRuntime ?? null);
@@ -83,15 +95,10 @@ export class ControlPlaneStore {
   readonly runHistory = computed(() => this.runs().slice(0, 8));
 
   constructor() {
-    interval(2000)
-      .pipe(
-        startWith(0),
-        takeUntilDestroyed(this.destroyRef),
-        catchError(() => EMPTY)
-      )
-      .subscribe(() => {
-        void this.reload(true);
-      });
+    this.destroyRef.onDestroy(() => {
+      this.refreshLoop?.unsubscribe();
+    });
+    this.scheduleRefresh(0);
   }
 
   async reload(silent = false): Promise<void> {
@@ -107,6 +114,7 @@ export class ControlPlaneStore {
     try {
       const snapshot = await firstValueFrom(this.api.snapshot());
       this.snapshot.set(snapshot);
+      this.reconcileTransientRuns(snapshot);
       this.generatedAt.set(snapshot.generatedAt);
       this.apiState.set('ready');
       this.errorMessage.set(null);
@@ -190,6 +198,25 @@ export class ControlPlaneStore {
   }
 
   private upsertRun(run: RunSummary): void {
+    const isTransient = run.status === 'starting' || run.status === 'stopping';
+
+    this.transientRuns.update((current) => {
+      if (!isTransient) {
+        if (!(run.id in current)) {
+          return current;
+        }
+
+        const next = { ...current };
+        delete next[run.id];
+        return next;
+      }
+
+      return {
+        ...current,
+        [run.id]: run
+      };
+    });
+
     const snapshot = this.snapshot();
     if (!snapshot) {
       return;
@@ -200,6 +227,70 @@ export class ControlPlaneStore {
       ...snapshot,
       runs: [run, ...remainingRuns].sort((left, right) => right.startedAt.localeCompare(left.startedAt))
     });
+  }
+
+  private reconcileTransientRuns(snapshot: ControlPlaneSnapshot): void {
+    const current = this.transientRuns();
+    if (Object.keys(current).length === 0) {
+      return;
+    }
+
+    let changed = false;
+    const next = { ...current };
+
+    for (const [runId, transient] of Object.entries(current)) {
+      const actual = snapshot.runs.find((candidate) => candidate.id === runId);
+      if (!actual) {
+        continue;
+      }
+
+      const transientStatus = transient.status;
+      const actualStatus = actual.status;
+      const shouldClear =
+        actualStatus === 'completed' ||
+        actualStatus === 'failed' ||
+        (transientStatus === 'starting' && actualStatus !== 'starting') ||
+        (transientStatus === 'stopping' && actualStatus !== 'stopping');
+
+      if (!shouldClear) {
+        continue;
+      }
+
+      delete next[runId];
+      changed = true;
+    }
+
+    if (changed) {
+      this.transientRuns.set(next);
+    }
+  }
+
+  private scheduleRefresh(delayMs: number): void {
+    this.refreshLoop?.unsubscribe();
+    this.refreshLoop = timer(delayMs)
+      .pipe(takeUntilDestroyed(this.destroyRef), catchError(() => EMPTY))
+      .subscribe(() => {
+        void this.reload(true).finally(() => {
+          this.scheduleRefresh(this.nextRefreshDelayMs());
+        });
+      });
+  }
+
+  private nextRefreshDelayMs(): number {
+    const hasPendingAction = this.pendingRunId() !== null;
+    const hasTransientRun = this.runs().some(
+      (run) => run.status === 'starting' || run.status === 'stopping'
+    );
+
+    if (hasPendingAction || hasTransientRun) {
+      return 500;
+    }
+
+    if (this.activeRuns().length > 0) {
+      return 1500;
+    }
+
+    return 3000;
   }
 
   private describeError(error: unknown, fallback: string): string {
