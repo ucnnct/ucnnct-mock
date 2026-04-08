@@ -178,7 +178,7 @@
             <span
               class="badge"
               [class.badge--success]="run.status === 'running' || run.status === 'completed'"
-              [class.badge--warning]="run.status === 'paused'"
+              [class.badge--warning]="run.status === 'starting' || run.status === 'paused' || run.status === 'stopping'"
               [class.badge--danger]="run.status === 'failed'"
             >
               {{ run.status }}
@@ -204,7 +204,7 @@
           <div class="button-row">
             <button class="btn btn-secondary" type="button" *ngIf="run.status === 'running'" (click)="pause(run.id); $event.stopPropagation()" [disabled]="store.isRunPending(run.id)">Pause</button>
             <button class="btn btn-secondary" type="button" *ngIf="run.status === 'paused'" (click)="resume(run.id); $event.stopPropagation()" [disabled]="store.isRunPending(run.id)">Resume</button>
-            <button class="btn btn-danger" type="button" *ngIf="run.status === 'running' || run.status === 'paused'" (click)="stop(run.id); $event.stopPropagation()" [disabled]="store.isRunPending(run.id)">Stop</button>
+            <button class="btn btn-danger" type="button" *ngIf="run.status === 'starting' || run.status === 'running' || run.status === 'paused'" (click)="stop(run.id); $event.stopPropagation()" [disabled]="store.isRunPending(run.id)">Stop</button>
           </div>
         </div>
       </article>

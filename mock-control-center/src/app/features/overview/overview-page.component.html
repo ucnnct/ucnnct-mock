@@ -89,7 +89,7 @@
             <span
               class="badge"
               [class.badge--success]="run.status === 'running' || run.status === 'completed'"
-              [class.badge--warning]="run.status === 'paused'"
+              [class.badge--warning]="run.status === 'starting' || run.status === 'paused' || run.status === 'stopping'"
               [class.badge--danger]="run.status === 'failed'"
             >
               {{ run.status }}

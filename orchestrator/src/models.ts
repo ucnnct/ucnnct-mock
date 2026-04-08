@@ -1,6 +1,6 @@
 export type EnvironmentName = 'staging';
 
-export type RunStatus = 'running' | 'paused' | 'completed' | 'failed';
+export type RunStatus = 'starting' | 'running' | 'paused' | 'stopping' | 'completed' | 'failed';
 
 export type ServiceFocus =
   | 'frontend'

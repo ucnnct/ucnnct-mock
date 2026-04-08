@@ -135,6 +135,7 @@ export class ControlPlaneService {
   private readonly mockUserOrigin = process.env.MOCK_USER_SERVICE_ORIGIN ?? 'http://localhost:7500';
   private readonly workerController = new KubernetesWorkerController();
   private readonly bootstrapRuns = new Map<string, BootstrapRun>();
+  private readonly stoppingRuns = new Map<string, RunSummary>();
   private readonly runPlans = new Map<string, RunPlan>();
 
   private readonly planner: LoadPlannerConfig = {
@@ -258,14 +259,21 @@ export class ControlPlaneService {
       );
     }
 
-    const runs = [
-      ...Array.from(groupedAssignments.entries()).map(([runId, assignments]) =>
-        this.aggregateRunSummary(runId, assignments, currentLeases)
-      ),
-      ...Array.from(this.bootstrapRuns.entries())
-        .filter(([runId]) => !groupedAssignments.has(runId))
-        .map(([, bootstrapRun]) => bootstrapRun.summary)
-    ].sort((left, right) => right.startedAt.localeCompare(left.startedAt));
+    const runMap = new Map<string, RunSummary>();
+    Array.from(groupedAssignments.entries()).forEach(([runId, assignments]) => {
+      runMap.set(runId, this.aggregateRunSummary(runId, assignments, currentLeases));
+    });
+    Array.from(this.bootstrapRuns.entries())
+      .filter(([runId]) => !groupedAssignments.has(runId))
+      .forEach(([runId, bootstrapRun]) => {
+        runMap.set(runId, bootstrapRun.summary);
+      });
+    Array.from(this.stoppingRuns.entries()).forEach(([runId, stoppingSummary]) => {
+      const current = runMap.get(runId);
+      runMap.set(runId, current ? this.overlayTransientRun(current, stoppingSummary) : stoppingSummary);
+    });
+
+    const runs = Array.from(runMap.values()).sort((left, right) => right.startedAt.localeCompare(left.startedAt));
 
     const services = this.buildServices(runs);
     const workerNodes = this.buildWorkerNodes(workerSources);
@@ -387,46 +395,29 @@ export class ControlPlaneService {
 
   async stopRun(runId: string): Promise<RunSummary | null> {
     const bootstrapRun = this.bootstrapRuns.get(runId);
-    if (bootstrapRun) {
-      bootstrapRun.cancelled = true;
-      bootstrapRun.summary = {
-        ...bootstrapRun.summary,
-        status: 'completed',
-        progressPercent: 100,
-        updatedAt: new Date().toISOString(),
-        events: [
-          {
-            id: `bootstrap-stop-${crypto.randomUUID().slice(0, 8)}`,
-            timestamp: new Date().toISOString(),
-            severity: 'warning' as const,
-            title: 'Run bootstrap cancelled',
-            detail: 'Provisioning was cancelled before worker shard dispatch completed.'
-          },
-          ...bootstrapRun.summary.events
-        ].slice(0, 10)
-      };
-      return bootstrapRun.summary;
-    }
-
     const assignments = await this.findAssignmentsByRunId(runId);
-    if (assignments.length === 0) {
+    if (!bootstrapRun && assignments.length === 0) {
       return null;
     }
 
-    const updatedAssignments = await Promise.all(
-      assignments.map((assignment) =>
-        this.httpJson<WorkerAssignment>(
-          `${assignment.target.baseUrl}/api/v1/worker/assignments/${assignment.assignment.id}/stop`,
-          { method: 'POST' }
-        ).then((updatedAssignment) => ({ target: assignment.target, assignment: updatedAssignment }))
-      )
-    );
+    if (bootstrapRun) {
+      bootstrapRun.cancelled = true;
+    }
 
-    await this.safeJson(`${this.mockUserOrigin}/api/v1/mock-users/runs/${runId}/release`, null, {
-      method: 'POST'
-    });
+    const baseSummary =
+      assignments.length > 0
+        ? await this.summarizeAssignments(runId, assignments)
+        : bootstrapRun?.summary ?? this.createBootstrapSummary(runId, this.runPlans.get(runId)!);
+    const stoppingSummary = this.toStoppingSummary(baseSummary);
 
-    return this.summarizeAssignments(runId, updatedAssignments);
+    if (assignments.length > 0) {
+      this.stoppingRuns.set(runId, stoppingSummary);
+    } else {
+      this.updateBootstrapRun(runId, () => stoppingSummary);
+    }
+
+    void this.completeStopRun(runId, assignments, Boolean(bootstrapRun));
+    return stoppingSummary;
   }
 
   private async bootstrapRun(runId: string, plan: RunPlan): Promise<void> {
@@ -475,6 +466,7 @@ export class ControlPlaneService {
       bootstrapRun.leaseId = leaseId;
       if (bootstrapRun.cancelled) {
         await this.releaseRunLease(runId);
+        this.updateBootstrapRun(runId, (summary) => this.toCompletedBootstrapSummary(summary));
         return;
       }
       let workerTargets = await this.listWorkerTargets(true);
@@ -503,6 +495,12 @@ export class ControlPlaneService {
         }));
       }
 
+      if (this.bootstrapRuns.get(runId)?.cancelled) {
+        await this.releaseRunLease(runId);
+        this.updateBootstrapRun(runId, (summary) => this.toCompletedBootstrapSummary(summary));
+        return;
+      }
+
       if (workerTargets.length === 0) {
         throw new Error('No ready worker-service targets were available to receive shard assignments.');
       }
@@ -511,6 +509,20 @@ export class ControlPlaneService {
       const identityBuckets = this.partitionAssignedUsers(lease.assignedUsers, plan.workerShards);
 
       for (let index = 0; index < shardSizes.length; index += 1) {
+        if (this.bootstrapRuns.get(runId)?.cancelled) {
+          await Promise.all(
+            createdAssignments.map((assignment) =>
+              this.safeJson(
+                `${assignment.target.baseUrl}/api/v1/worker/assignments/${assignment.assignmentId}/stop`,
+                null,
+                { method: 'POST' }
+              )
+            )
+          );
+          await this.releaseRunLease(runId);
+          this.updateBootstrapRun(runId, (summary) => this.toCompletedBootstrapSummary(summary));
+          return;
+        }
         const target = workerTargets[index % workerTargets.length]!;
         const assignment = await this.httpJson<WorkerAssignment>(
           `${target.baseUrl}/api/v1/worker/assignments`,
@@ -538,24 +550,7 @@ export class ControlPlaneService {
         createdAssignments.push({ target, assignmentId: assignment.id });
       }
 
-      this.bootstrapRuns.set(runId, {
-        summary: {
-          ...this.createBootstrapSummary(runId, plan),
-          progressPercent: 1,
-          updatedAt: new Date().toISOString(),
-          events: [
-            {
-              id: `bootstrap-dispatch-${crypto.randomUUID().slice(0, 8)}`,
-              timestamp: new Date().toISOString(),
-              severity: 'success' as const,
-              title: 'Worker shards dispatched',
-              detail: `${plan.workerShards} shards are executing across ${workerTargets.length} ready worker pods.`
-            }
-          ]
-        },
-        cancelled: false,
-        leaseId
-      });
+      this.bootstrapRuns.delete(runId);
       console.info(
         `[control-plane] dispatched ${plan.workerShards} shards for run ${runId} across ${workerTargets.length} workers`
       );
@@ -577,22 +572,26 @@ export class ControlPlaneService {
         `[control-plane] bootstrap failed for ${runId}:`,
         error instanceof Error ? error.message : error
       );
-      this.updateBootstrapRun(runId, (summary) => ({
-        ...summary,
-        status: 'failed',
-        progressPercent: 100,
-        updatedAt: new Date().toISOString(),
-        events: [
-          {
-            id: `bootstrap-fail-${crypto.randomUUID().slice(0, 8)}`,
-            timestamp: new Date().toISOString(),
-            severity: 'warning' as const,
-            title: 'Run bootstrap failed',
-            detail: error instanceof Error ? error.message : 'unknown error'
-          },
-          ...summary.events
-        ].slice(0, 10)
-      }));
+      if (this.bootstrapRuns.get(runId)?.cancelled) {
+        this.updateBootstrapRun(runId, (summary) => this.toCompletedBootstrapSummary(summary));
+      } else {
+        this.updateBootstrapRun(runId, (summary) => ({
+          ...summary,
+          status: 'failed',
+          progressPercent: 100,
+          updatedAt: new Date().toISOString(),
+          events: [
+            {
+              id: `bootstrap-fail-${crypto.randomUUID().slice(0, 8)}`,
+              timestamp: new Date().toISOString(),
+              severity: 'warning' as const,
+              title: 'Run bootstrap failed',
+              detail: error instanceof Error ? error.message : 'unknown error'
+            },
+            ...summary.events
+          ].slice(0, 10)
+        }));
+      }
     }
   }
 
@@ -620,7 +619,7 @@ export class ControlPlaneService {
     return {
       ...plan.input,
       id: runId,
-      status: 'running',
+      status: 'starting',
       leasedIdentities: plan.leasedIdentities,
       workerShards: plan.workerShards,
       targetWorkerReplicas: plan.targetWorkerReplicas,
@@ -657,6 +656,89 @@ export class ControlPlaneService {
     }
     bootstrapRun.summary = updater(bootstrapRun.summary);
     this.bootstrapRuns.set(runId, bootstrapRun);
+  }
+
+  private async completeStopRun(
+    runId: string,
+    assignments: WorkerAssignmentRef[],
+    hasBootstrapRun: boolean
+  ): Promise<void> {
+    try {
+      if (assignments.length > 0) {
+        await Promise.all(
+          assignments.map((assignment) =>
+            this.safeJson(
+              `${assignment.target.baseUrl}/api/v1/worker/assignments/${assignment.assignment.id}/stop`,
+              null,
+              { method: 'POST' }
+            )
+          )
+        );
+      }
+
+      await this.releaseRunLease(runId);
+
+      if (hasBootstrapRun && assignments.length === 0) {
+        this.updateBootstrapRun(runId, (summary) => this.toCompletedBootstrapSummary(summary));
+      }
+    } finally {
+      this.stoppingRuns.delete(runId);
+      if (assignments.length > 0) {
+        this.bootstrapRuns.delete(runId);
+      }
+    }
+  }
+
+  private overlayTransientRun(current: RunSummary, transient: RunSummary): RunSummary {
+    return {
+      ...current,
+      status: transient.status,
+      updatedAt: transient.updatedAt,
+      events: transient.events,
+      progressPercent: transient.progressPercent
+    };
+  }
+
+  private toStoppingSummary(summary: RunSummary): RunSummary {
+    const timestamp = new Date().toISOString();
+    return {
+      ...summary,
+      status: 'stopping',
+      updatedAt: timestamp,
+      events: [
+        {
+          id: `stop-requested-${crypto.randomUUID().slice(0, 8)}`,
+          timestamp,
+          severity: 'warning' as const,
+          title: 'Stop requested',
+          detail: 'Run shutdown is in progress; worker assignments and leases are being closed.'
+        },
+        ...summary.events
+      ].slice(0, 10)
+    };
+  }
+
+  private toCompletedBootstrapSummary(summary: RunSummary): RunSummary {
+    const timestamp = new Date().toISOString();
+    return {
+      ...summary,
+      status: 'completed',
+      progressPercent: 100,
+      activeUsers: 0,
+      connectedUsers: 0,
+      openSockets: 0,
+      updatedAt: timestamp,
+      events: [
+        {
+          id: `bootstrap-stop-${crypto.randomUUID().slice(0, 8)}`,
+          timestamp,
+          severity: 'warning' as const,
+          title: 'Run bootstrap cancelled',
+          detail: 'Provisioning was cancelled before worker shard dispatch completed.'
+        },
+        ...summary.events
+      ].slice(0, 10)
+    };
   }
 
   private async releaseRunLease(runId: string): Promise<void> {
@@ -878,7 +960,7 @@ export class ControlPlaneService {
   }
 
   private buildServices(runs: RunSummary[]): ServiceScaling[] {
-    const demand = this.aggregateDemand(runs.filter((run) => run.status === 'running'));
+    const demand = this.aggregateDemand(runs.filter((run) => run.status === 'running' || run.status === 'starting'));
     const pressures = this.serviceDefinitions.map((definition) => ({
       definition,
       pressure: this.pressureFor(definition.focus, demand)
@@ -955,7 +1037,9 @@ export class ControlPlaneService {
   }
 
   private buildDashboard(runs: RunSummary[], services: ServiceScaling[], workerSources: WorkerSource[], workerNodes: WorkerNode[]): DashboardStats {
-    const liveRuns = runs.filter((run) => run.status === 'running');
+    const liveRuns = runs.filter(
+      (run) => run.status === 'starting' || run.status === 'running' || run.status === 'paused' || run.status === 'stopping'
+    );
     return {
       activeRuns: liveRuns.length,
       activeUsers: liveRuns.reduce((sum, run) => sum + run.activeUsers, 0),
@@ -978,7 +1062,7 @@ export class ControlPlaneService {
         detail: `Replicas are at ${service.currentReplicas}/${service.targetReplicas}; CPU ${service.cpuPercent}% and memory ${service.memoryPercent}%.`
       }));
     const runEvents = runs
-      .filter((run) => run.status === 'running')
+      .filter((run) => run.status === 'starting' || run.status === 'running' || run.status === 'stopping')
       .slice(0, 4)
       .map((run) => ({
         id: `run-${run.id}`,

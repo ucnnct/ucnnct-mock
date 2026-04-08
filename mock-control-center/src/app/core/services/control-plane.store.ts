@@ -68,7 +68,13 @@ export class ControlPlaneStore {
   readonly leases = computed<LeaseRecord[]>(() => this.snapshot()?.leases ?? []);
   readonly scalingEvents = computed<ScalingEvent[]>(() => this.snapshot()?.scalingEvents ?? []);
   readonly activeRuns = computed(() =>
-    this.runs().filter((run) => run.status === 'running' || run.status === 'paused')
+    this.runs().filter(
+      (run) =>
+        run.status === 'starting' ||
+        run.status === 'running' ||
+        run.status === 'paused' ||
+        run.status === 'stopping'
+    )
   );
   readonly hottestServices = computed(() =>
     [...this.services()].sort((left, right) => right.cpuPercent - left.cpuPercent).slice(0, 4)
@@ -77,7 +83,7 @@ export class ControlPlaneStore {
   readonly runHistory = computed(() => this.runs().slice(0, 8));
 
   constructor() {
-    interval(5000)
+    interval(2000)
       .pipe(
         startWith(0),
         takeUntilDestroyed(this.destroyRef),
