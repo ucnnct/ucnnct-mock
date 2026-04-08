@@ -372,6 +372,7 @@ export class WorkerEngine {
   private buildUsers(input: WorkerAssignmentInput, createdAtMs: number): VirtualUserState[] {
     const rampUpMs = input.rampUpSeconds * 1_000;
     const identities = input.assignedUsers ?? [];
+    // When gradual online is disabled, every virtual user becomes active immediately.
     const instantOnlineStart = input.initialOnlineRatio >= 0.999;
 
     return Array.from({ length: input.virtualUsers }, (_value, index) => {
