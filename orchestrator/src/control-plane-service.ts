@@ -487,12 +487,7 @@ export class ControlPlaneService {
         }));
 
         await this.workerController.prepareWorkerCapacity(plan.targetWorkerReplicas);
-        workerTargets = (
-          await this.workerController.waitForReadyWorkerPods(plan.targetWorkerReplicas, 300_000)
-        ).map((pod) => ({
-          ...pod,
-          kind: 'pod' as const
-        }));
+        workerTargets = await this.waitForInitialWorkerTargets(runId, plan.targetWorkerReplicas, 300_000);
       }
 
       if (this.bootstrapRuns.get(runId)?.cancelled) {
@@ -507,52 +502,18 @@ export class ControlPlaneService {
 
       const shardSizes = this.splitVirtualUsers(plan.input.virtualUsers, plan.workerShards);
       const identityBuckets = this.partitionAssignedUsers(lease.assignedUsers, plan.workerShards);
-
-      for (let index = 0; index < shardSizes.length; index += 1) {
-        if (this.bootstrapRuns.get(runId)?.cancelled) {
-          await Promise.all(
-            createdAssignments.map((assignment) =>
-              this.safeJson(
-                `${assignment.target.baseUrl}/api/v1/worker/assignments/${assignment.assignmentId}/stop`,
-                null,
-                { method: 'POST' }
-              )
-            )
-          );
-          await this.releaseRunLease(runId);
-          this.updateBootstrapRun(runId, (summary) => this.toCompletedBootstrapSummary(summary));
-          return;
-        }
-        const target = workerTargets[index % workerTargets.length]!;
-        const assignment = await this.httpJson<WorkerAssignment>(
-          `${target.baseUrl}/api/v1/worker/assignments`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              runId,
-              assignmentLabel: plan.input.runName,
-              environment: plan.input.environment,
-              virtualUsers: shardSizes[index],
-              durationSeconds: plan.input.durationSeconds,
-              rampUpSeconds: plan.input.rampUpSeconds,
-              thinkTimeMinMs: plan.input.thinkTimeMinMs,
-              thinkTimeMaxMs: plan.input.thinkTimeMaxMs,
-              initialOnlineRatio: plan.input.initialOnlineRatio,
-              avgSessionDurationSeconds: plan.input.avgSessionDurationSeconds,
-              weights: plan.input.weights,
-              media: plan.input.media,
-              targetBaseUrl: 'https://staging.uconnect.cc',
-              assignedUsers: identityBuckets[index]
-            })
-          }
-        );
-        createdAssignments.push({ target, assignmentId: assignment.id });
-      }
+      await this.dispatchAssignmentsProgressively(
+        runId,
+        plan,
+        shardSizes,
+        identityBuckets,
+        workerTargets,
+        createdAssignments
+      );
 
       this.bootstrapRuns.delete(runId);
       console.info(
-        `[control-plane] dispatched ${plan.workerShards} shards for run ${runId} across ${workerTargets.length} workers`
+        `[control-plane] dispatched ${plan.workerShards} shards for run ${runId}`
       );
     } catch (error) {
       await Promise.all(
@@ -689,6 +650,178 @@ export class ControlPlaneService {
     }
   }
 
+  private async waitForInitialWorkerTargets(
+    runId: string,
+    targetReplicas: number,
+    timeoutMs: number
+  ): Promise<WorkerTarget[]> {
+    const minimumReadyWorkers = Math.min(
+      targetReplicas,
+      Math.max(this.planner.workerMinReplicas, Math.min(8, Math.ceil(targetReplicas * 0.2)))
+    );
+    const deadline = Date.now() + timeoutMs;
+    let latestTargets: WorkerTarget[] = [];
+
+    while (Date.now() < deadline) {
+      latestTargets = await this.listWorkerTargets(true);
+      if (latestTargets.length >= minimumReadyWorkers) {
+        return latestTargets;
+      }
+
+      this.updateBootstrapRun(runId, (summary) => ({
+        ...summary,
+        updatedAt: new Date().toISOString(),
+        events: [
+          {
+            id: `bootstrap-wait-${crypto.randomUUID().slice(0, 8)}`,
+            timestamp: new Date().toISOString(),
+            severity: 'info' as const,
+            title: 'Waiting for worker pods',
+            detail: `${latestTargets.length}/${minimumReadyWorkers} worker pods are ready; dispatch will start as soon as the initial worker floor is available.`
+          },
+          ...summary.events
+        ].slice(0, 10)
+      }));
+
+      if (this.bootstrapRuns.get(runId)?.cancelled) {
+        return latestTargets;
+      }
+
+      await this.sleep(2_000);
+    }
+
+    return latestTargets;
+  }
+
+  private async dispatchAssignmentsProgressively(
+    runId: string,
+    plan: RunPlan,
+    shardSizes: number[],
+    identityBuckets: LeaseResponse['assignedUsers'][],
+    initialTargets: WorkerTarget[],
+    createdAssignments: Array<{ target: WorkerTarget; assignmentId: string }>
+  ): Promise<void> {
+    const pendingShards = shardSizes.map((virtualUsers, index) => ({
+      index,
+      virtualUsers,
+      assignedUsers: identityBuckets[index]
+    }));
+    const assignmentCounts = new Map<string, number>();
+    const dispatchDeadline = Date.now() + 300_000;
+    let latestTargets = initialTargets;
+
+    while (pendingShards.length > 0) {
+      if (this.bootstrapRuns.get(runId)?.cancelled) {
+        await this.stopCreatedAssignments(createdAssignments);
+        await this.releaseRunLease(runId);
+        this.updateBootstrapRun(runId, (summary) => this.toCompletedBootstrapSummary(summary));
+        throw new Error(`Run ${runId} bootstrap cancelled during shard dispatch.`);
+      }
+
+      latestTargets = await this.listWorkerTargets(true);
+      if (latestTargets.length === 0) {
+        if (Date.now() >= dispatchDeadline) {
+          throw new Error('No ready worker-service targets were available to receive shard assignments.');
+        }
+
+        await this.sleep(2_000);
+        continue;
+      }
+
+      const orderedTargets = [...latestTargets].sort((left, right) => {
+        const leftCount = assignmentCounts.get(left.name) ?? 0;
+        const rightCount = assignmentCounts.get(right.name) ?? 0;
+        return leftCount - rightCount || left.name.localeCompare(right.name);
+      });
+
+      let dispatchedThisPass = 0;
+      for (const target of orderedTargets) {
+        const pending = pendingShards.shift();
+        if (!pending) {
+          break;
+        }
+
+        const assignment = await this.httpJson<WorkerAssignment>(
+          `${target.baseUrl}/api/v1/worker/assignments`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              runId,
+              assignmentLabel: plan.input.runName,
+              environment: plan.input.environment,
+              virtualUsers: pending.virtualUsers,
+              durationSeconds: plan.input.durationSeconds,
+              rampUpSeconds: plan.input.rampUpSeconds,
+              thinkTimeMinMs: plan.input.thinkTimeMinMs,
+              thinkTimeMaxMs: plan.input.thinkTimeMaxMs,
+              initialOnlineRatio: plan.input.initialOnlineRatio,
+              avgSessionDurationSeconds: plan.input.avgSessionDurationSeconds,
+              weights: plan.input.weights,
+              media: plan.input.media,
+              targetBaseUrl: 'https://staging.uconnect.cc',
+              assignedUsers: pending.assignedUsers
+            })
+          }
+        );
+
+        assignmentCounts.set(target.name, (assignmentCounts.get(target.name) ?? 0) + 1);
+        createdAssignments.push({ target, assignmentId: assignment.id });
+        dispatchedThisPass += 1;
+      }
+
+      this.updateBootstrapRun(runId, (summary) => ({
+        ...summary,
+        updatedAt: new Date().toISOString(),
+        progressPercent: Math.min(
+          99,
+          Math.round(((plan.workerShards - pendingShards.length) / Math.max(plan.workerShards, 1)) * 100)
+        ),
+        events: [
+          {
+            id: `bootstrap-dispatch-${crypto.randomUUID().slice(0, 8)}`,
+            timestamp: new Date().toISOString(),
+            severity: 'success' as const,
+            title: 'Dispatching worker shards',
+            detail: `${plan.workerShards - pendingShards.length}/${plan.workerShards} shards dispatched across ${latestTargets.length} ready worker pods.`
+          },
+          ...summary.events
+        ].slice(0, 10)
+      }));
+
+      if (pendingShards.length === 0) {
+        return;
+      }
+
+      if (Date.now() >= dispatchDeadline) {
+        throw new Error(
+          `Timed out while dispatching worker shards. ${pendingShards.length} shards are still waiting for ready workers.`
+        );
+      }
+
+      if (dispatchedThisPass === 0) {
+        await this.sleep(2_000);
+        continue;
+      }
+
+      await this.sleep(1_000);
+    }
+  }
+
+  private async stopCreatedAssignments(
+    createdAssignments: Array<{ target: WorkerTarget; assignmentId: string }>
+  ): Promise<void> {
+    await Promise.all(
+      createdAssignments.map((assignment) =>
+        this.safeJson(
+          `${assignment.target.baseUrl}/api/v1/worker/assignments/${assignment.assignmentId}/stop`,
+          null,
+          { method: 'POST' }
+        )
+      )
+    );
+  }
+
   private overlayTransientRun(current: RunSummary, transient: RunSummary): RunSummary {
     return {
       ...current,
@@ -745,6 +878,10 @@ export class ControlPlaneService {
     await this.safeJson(`${this.mockUserOrigin}/api/v1/mock-users/runs/${runId}/release`, null, {
       method: 'POST'
     });
+  }
+
+  private async sleep(durationMs: number): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, durationMs));
   }
 
   private async summarizeAssignments(
