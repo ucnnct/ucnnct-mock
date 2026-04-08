@@ -145,15 +145,15 @@ export class ControlPlaneStore {
   }
 
   async pauseRun(runId: string): Promise<void> {
-    await this.runAction(runId, () => this.api.pauseRun(runId));
+    await this.runAction(runId, () => this.api.pauseRun(runId), 'paused');
   }
 
   async resumeRun(runId: string): Promise<void> {
-    await this.runAction(runId, () => this.api.resumeRun(runId));
+    await this.runAction(runId, () => this.api.resumeRun(runId), 'running');
   }
 
   async stopRun(runId: string): Promise<void> {
-    await this.runAction(runId, () => this.api.stopRun(runId));
+    await this.runAction(runId, () => this.api.stopRun(runId), 'stopping');
   }
 
   async loadLeaseDetail(leaseId: string): Promise<void> {
@@ -182,8 +182,13 @@ export class ControlPlaneStore {
     return this.pendingRunId() === runId;
   }
 
-  private async runAction(runId: string, action: () => ReturnType<ControlPlaneApiService['pauseRun']>): Promise<void> {
+  private async runAction(
+    runId: string,
+    action: () => ReturnType<ControlPlaneApiService['pauseRun']>,
+    optimisticStatus?: RunSummary['status']
+  ): Promise<void> {
     this.pendingRunId.set(runId);
+    this.applyOptimisticStatus(runId, optimisticStatus);
 
     try {
       const run = await firstValueFrom(action());
@@ -226,6 +231,23 @@ export class ControlPlaneStore {
     this.snapshot.set({
       ...snapshot,
       runs: [run, ...remainingRuns].sort((left, right) => right.startedAt.localeCompare(left.startedAt))
+    });
+  }
+
+  private applyOptimisticStatus(runId: string, optimisticStatus?: RunSummary['status']): void {
+    if (!optimisticStatus) {
+      return;
+    }
+
+    const currentRun = this.runs().find((candidate) => candidate.id === runId);
+    if (!currentRun || currentRun.status === optimisticStatus) {
+      return;
+    }
+
+    this.upsertRun({
+      ...currentRun,
+      status: optimisticStatus,
+      updatedAt: new Date().toISOString()
     });
   }
 
