@@ -48,6 +48,9 @@
         <label class="field">
           <span>Ramp-up (s)</span>
           <input type="number" formControlName="rampUpSeconds" min="0" />
+          <small class="muted">
+            With <code>Gradual online</code> off, this only warms the worker plane. Users themselves are not staggered.
+          </small>
         </label>
         <label class="field">
           <span>Average session (s)</span>
@@ -73,7 +76,9 @@
         <label class="field" *ngIf="!gradualOnlineEnabled()">
           <span>Online start mode</span>
           <input type="text" value="All users start online" readonly />
-          <small class="muted">Every authenticated user initializes a realtime websocket session on staging.</small>
+          <small class="muted">
+            All virtual users enter the active loop immediately and every authenticated user initializes a realtime websocket session on staging.
+          </small>
         </label>
       </div>
 

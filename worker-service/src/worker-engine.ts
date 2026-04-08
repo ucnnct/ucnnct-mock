@@ -334,6 +334,10 @@ export class WorkerEngine {
     meta: { id: string; status: AssignmentStatus; createdAtMs: number; startedAtMs: number }
   ): WorkerAssignmentRuntime {
     const createdAtMs = meta.createdAtMs;
+    const users = this.buildUsers(input, createdAtMs);
+    const initiallyActiveUsers = users.filter(
+      (user) => user.activationOffsetMs === 0 && user.nextActionAtMs <= createdAtMs + TICK_MS * 2
+    ).length;
 
     return {
       ...input,
@@ -344,7 +348,7 @@ export class WorkerEngine {
       updatedAtMs: createdAtMs,
       elapsedSeconds: 0,
       progressPercent: meta.status === 'completed' ? 100 : 0,
-      activeUsers: 0,
+      activeUsers: initiallyActiveUsers,
       authenticatedUsers: 0,
       connectedUsers: 0,
       requestsPerSecond: 0,
@@ -361,20 +365,25 @@ export class WorkerEngine {
       objectiveMix: this.emptyObjectiveMix(),
       actionCounters: this.emptyCounters(),
       recentEvents: [],
-      users: this.buildUsers(input, createdAtMs)
+      users
     };
   }
 
   private buildUsers(input: WorkerAssignmentInput, createdAtMs: number): VirtualUserState[] {
     const rampUpMs = input.rampUpSeconds * 1_000;
     const identities = input.assignedUsers ?? [];
+    const instantOnlineStart = input.initialOnlineRatio >= 0.999;
 
     return Array.from({ length: input.virtualUsers }, (_value, index) => {
       const activationOffsetMs =
-        input.virtualUsers <= 1 ? 0 : Math.round((index / (input.virtualUsers - 1)) * rampUpMs);
-      const initialWaveOnline = Math.random() < input.initialOnlineRatio;
+        instantOnlineStart || input.virtualUsers <= 1
+          ? 0
+          : Math.round((index / (input.virtualUsers - 1)) * rampUpMs);
+      const initialWaveOnline = instantOnlineStart || Math.random() < input.initialOnlineRatio;
       const initialDelayMs = initialWaveOnline
-        ? this.randomInt(250, Math.max(input.thinkTimeMaxMs, 1_400))
+        ? instantOnlineStart
+          ? 0
+          : this.randomInt(250, Math.max(input.thinkTimeMaxMs, 1_400))
         : this.randomInt(
             Math.max(input.avgSessionDurationSeconds * 300, 8_000),
             Math.max(input.avgSessionDurationSeconds * 1_050, 25_000)
