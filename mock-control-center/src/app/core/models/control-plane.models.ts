@@ -25,14 +25,6 @@ export interface BehaviorWeights {
 
 export interface MediaProfile {
   uploadProbability: number;
-  minFileSizeKb: number;
-  maxFileSizeKb: number;
-}
-
-export interface RunLimits {
-  maxConcurrentActions: number;
-  stopOnHighErrorRate: boolean;
-  errorRateThreshold: number;
 }
 
 export interface RunDraftInput {
@@ -44,12 +36,9 @@ export interface RunDraftInput {
   thinkTimeMinMs: number;
   thinkTimeMaxMs: number;
   initialOnlineRatio: number;
-  websocketRatio: number;
   avgSessionDurationSeconds: number;
-  reconnectProbability: number;
   weights: BehaviorWeights;
   media: MediaProfile;
-  limits: RunLimits;
 }
 
 export interface RunEvent {

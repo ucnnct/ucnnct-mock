@@ -17,9 +17,7 @@ const runDraftSchema = z.object({
   thinkTimeMinMs: z.number().int().min(0).max(60000),
   thinkTimeMaxMs: z.number().int().min(0).max(60000),
   initialOnlineRatio: z.number().min(0).max(1),
-  websocketRatio: z.number().min(0).max(1),
   avgSessionDurationSeconds: z.number().int().min(30).max(7200),
-  reconnectProbability: z.number().min(0).max(1),
   weights: z.object({
     browse: z.number().min(0).max(100),
     privateMessage: z.number().min(0).max(100),
@@ -29,14 +27,7 @@ const runDraftSchema = z.object({
     notificationCheck: z.number().min(0).max(100)
   }),
   media: z.object({
-    uploadProbability: z.number().min(0).max(1),
-    minFileSizeKb: z.number().int().min(1).max(10240),
-    maxFileSizeKb: z.number().int().min(1).max(102400)
-  }),
-  limits: z.object({
-    maxConcurrentActions: z.number().int().min(1).max(5000),
-    stopOnHighErrorRate: z.boolean(),
-    errorRateThreshold: z.number().min(0).max(1)
+    uploadProbability: z.number().min(0).max(1)
   })
 });
 

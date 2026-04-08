@@ -36,14 +36,10 @@ type WorkerAssignment = {
   thinkTimeMinMs: number;
   thinkTimeMaxMs: number;
   initialOnlineRatio: number;
-  websocketRatio: number;
   avgSessionDurationSeconds: number;
-  reconnectProbability: number;
   weights: BehaviorWeights;
   media: {
     uploadProbability: number;
-    minFileSizeKb: number;
-    maxFileSizeKb: number;
   };
   targetBaseUrl?: string;
   id: string;
@@ -531,9 +527,7 @@ export class ControlPlaneService {
               thinkTimeMinMs: plan.input.thinkTimeMinMs,
               thinkTimeMaxMs: plan.input.thinkTimeMaxMs,
               initialOnlineRatio: plan.input.initialOnlineRatio,
-              websocketRatio: plan.input.websocketRatio,
               avgSessionDurationSeconds: plan.input.avgSessionDurationSeconds,
-              reconnectProbability: plan.input.reconnectProbability,
               weights: plan.input.weights,
               media: plan.input.media,
               targetBaseUrl: 'https://staging.uconnect.cc',
@@ -828,16 +822,9 @@ export class ControlPlaneService {
       thinkTimeMinMs: assignment.thinkTimeMinMs,
       thinkTimeMaxMs: assignment.thinkTimeMaxMs,
       initialOnlineRatio: assignment.initialOnlineRatio,
-      websocketRatio: assignment.websocketRatio,
       avgSessionDurationSeconds: assignment.avgSessionDurationSeconds,
-      reconnectProbability: assignment.reconnectProbability,
       weights: assignment.weights,
-      media: assignment.media,
-      limits: {
-        maxConcurrentActions: Math.max(Math.round(assignment.virtualUsers * 1.5), 100),
-        stopOnHighErrorRate: true,
-        errorRateThreshold: 0.2
-      }
+      media: assignment.media
     };
   }
 

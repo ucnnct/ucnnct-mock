@@ -64,18 +64,7 @@
         <label class="field">
           <span>Initial online ratio</span>
           <input type="number" formControlName="initialOnlineRatio" min="0" max="1" step="0.01" />
-        </label>
-        <label class="field">
-          <span>Websocket ratio</span>
-          <input type="number" formControlName="websocketRatio" min="0" max="1" step="0.01" />
-        </label>
-        <label class="field">
-          <span>Reconnect probability</span>
-          <input type="number" formControlName="reconnectProbability" min="0" max="1" step="0.01" />
-        </label>
-        <label class="field" [formGroup]="form.controls.limits">
-          <span>Max concurrent actions</span>
-          <input type="number" formControlName="maxConcurrentActions" min="1" />
+          <small class="muted">Every authenticated user initializes a realtime websocket session on staging.</small>
         </label>
       </div>
 
@@ -102,22 +91,10 @@
           </div>
           <div class="weight-grid">
             <label class="field"><span>Upload probability</span><input type="number" formControlName="uploadProbability" min="0" max="1" step="0.01" /></label>
-            <label class="field"><span>Min size KB</span><input type="number" formControlName="minFileSizeKb" min="1" /></label>
-            <label class="field"><span>Max size KB</span><input type="number" formControlName="maxFileSizeKb" min="1" /></label>
-          </div>
-        </div>
-
-        <div [formGroup]="form.controls.limits">
-          <div class="subsection-header">
-            <span class="eyebrow">Safety limits</span>
-            <strong>Guard rails</strong>
-          </div>
-          <div class="weight-grid">
-            <label class="field"><span>Error threshold</span><input type="number" formControlName="errorRateThreshold" min="0" max="1" step="0.01" /></label>
-            <label class="field field--checkbox">
-              <input type="checkbox" formControlName="stopOnHighErrorRate" />
-              <span>Stop on high error rate</span>
-            </label>
+            <p class="muted">
+              Upload probability increases the frequency of real media preparation and upload flows against
+              <code>staging.uconnect.cc</code>.
+            </p>
           </div>
         </div>
       </div>
@@ -158,8 +135,8 @@
             <div class="metric-value">{{ plannedRun().targetWorkerReplicas }}</div>
           </article>
           <article class="metric-card">
-            <span class="metric-label">Websockets</span>
-            <div class="metric-value">{{ (preview().virtualUsers * preview().websocketRatio) | number: '1.0-0' }}</div>
+            <span class="metric-label">Realtime-capable users</span>
+            <div class="metric-value">{{ preview().virtualUsers | number: '1.0-0' }}</div>
           </article>
           <article class="metric-card">
             <span class="metric-label">Weight sum</span>

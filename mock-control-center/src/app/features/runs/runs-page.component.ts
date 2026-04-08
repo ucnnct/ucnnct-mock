@@ -26,9 +26,7 @@ export class RunsPageComponent {
     thinkTimeMinMs: 800,
     thinkTimeMaxMs: 5000,
     initialOnlineRatio: 0.75,
-    websocketRatio: 0.85,
     avgSessionDurationSeconds: 420,
-    reconnectProbability: 0.08,
     weights: this.fb.nonNullable.group({
       browse: 20,
       privateMessage: 30,
@@ -38,14 +36,7 @@ export class RunsPageComponent {
       notificationCheck: 10
     }),
     media: this.fb.nonNullable.group({
-      uploadProbability: 0.08,
-      minFileSizeKb: 50,
-      maxFileSizeKb: 1024
-    }),
-    limits: this.fb.nonNullable.group({
-      maxConcurrentActions: 100,
-      stopOnHighErrorRate: true,
-      errorRateThreshold: 0.2
+      uploadProbability: 0.08
     })
   });
 
@@ -117,7 +108,7 @@ export class RunsPageComponent {
         durationSeconds: 900,
         rampUpSeconds: 120,
         weights: { browse: 20, privateMessage: 30, group: 20, media: 10, social: 10, notificationCheck: 10 },
-        media: { uploadProbability: 0.08, minFileSizeKb: 50, maxFileSizeKb: 1024 }
+        media: { uploadProbability: 0.08 }
       });
       return;
     }
@@ -128,9 +119,8 @@ export class RunsPageComponent {
         virtualUsers: 420,
         durationSeconds: 720,
         rampUpSeconds: 90,
-        websocketRatio: 0.92,
         weights: { browse: 14, privateMessage: 40, group: 24, media: 4, social: 8, notificationCheck: 10 },
-        media: { uploadProbability: 0.03, minFileSizeKb: 32, maxFileSizeKb: 512 }
+        media: { uploadProbability: 0.03 }
       });
       return;
     }
@@ -141,10 +131,9 @@ export class RunsPageComponent {
         virtualUsers: 10_000,
         durationSeconds: 900,
         rampUpSeconds: 300,
-        websocketRatio: 0.88,
         avgSessionDurationSeconds: 480,
         weights: { browse: 18, privateMessage: 28, group: 22, media: 8, social: 12, notificationCheck: 12 },
-        media: { uploadProbability: 0.04, minFileSizeKb: 64, maxFileSizeKb: 1024 }
+        media: { uploadProbability: 0.04 }
       });
       return;
     }
@@ -154,9 +143,8 @@ export class RunsPageComponent {
       virtualUsers: 180,
       durationSeconds: 600,
       rampUpSeconds: 75,
-      websocketRatio: 0.78,
       weights: { browse: 12, privateMessage: 24, group: 16, media: 32, social: 6, notificationCheck: 10 },
-      media: { uploadProbability: 0.22, minFileSizeKb: 128, maxFileSizeKb: 4096 }
+      media: { uploadProbability: 0.22 }
     });
   }
 

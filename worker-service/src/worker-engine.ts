@@ -421,10 +421,6 @@ export class WorkerEngine {
       return 'logout';
     }
 
-    if (Math.random() < assignment.reconnectProbability * 0.02) {
-      return 'logout';
-    }
-
     if (!user.sessionObjective || Math.random() < 0.05) {
       user.sessionObjective = this.pickObjective(assignment);
     }
@@ -557,7 +553,7 @@ export class WorkerEngine {
     switch (action) {
       case 'login': {
         user.authenticated = true;
-        user.connectedToWs = Math.random() < assignment.websocketRatio;
+        user.connectedToWs = true;
         user.currentPage = 'HOME';
         user.currentConversationId = null;
         user.currentGroupId = null;
@@ -567,7 +563,7 @@ export class WorkerEngine {
         user.sessionRuns += 1;
         this.scheduleLiveTraffic(assignment, user, action);
         return {
-          detail: `Logged in and opened a ${user.sessionObjective} session${user.connectedToWs ? ' with websocket intent' : ' over HTTP only'}${assignment.targetBaseUrl ? ' using live front traffic.' : '.'}`,
+          detail: `Logged in, initialized the realtime websocket and opened a ${user.sessionObjective} session${assignment.targetBaseUrl ? ' using live staging traffic.' : '.'}`,
           requestCost,
           messageCount: 0,
           uploadCount: 0,
@@ -1094,9 +1090,7 @@ export class WorkerEngine {
         thinkTimeMinMs: 900,
         thinkTimeMaxMs: 4_200,
         initialOnlineRatio: 0.78,
-        websocketRatio: 0.88,
         avgSessionDurationSeconds: 420,
-        reconnectProbability: 0.08,
         weights: {
           browse: 20,
           privateMessage: 30,
@@ -1105,7 +1099,7 @@ export class WorkerEngine {
           social: 10,
           notificationCheck: 8
         },
-        media: { uploadProbability: 0.09, minFileSizeKb: 64, maxFileSizeKb: 1_024 }
+        media: { uploadProbability: 0.09 }
       },
       {
         id: 'assignment-seed-live',
@@ -1130,9 +1124,7 @@ export class WorkerEngine {
           thinkTimeMinMs: 1_100,
           thinkTimeMaxMs: 3_400,
           initialOnlineRatio: 0.72,
-          websocketRatio: 0.8,
           avgSessionDurationSeconds: 280,
-          reconnectProbability: 0.05,
           weights: {
             browse: 14,
             privateMessage: 18,
@@ -1141,7 +1133,7 @@ export class WorkerEngine {
             social: 8,
             notificationCheck: 16
           },
-          media: { uploadProbability: 0.18, minFileSizeKb: 128, maxFileSizeKb: 2_048 }
+          media: { uploadProbability: 0.18 }
         },
         {
           id: 'assignment-seed-history',
@@ -1237,8 +1229,7 @@ export class WorkerEngine {
     user: Pick<VirtualUserState, 'initialWaveOnline'>
   ): number {
     const base = assignment.avgSessionDurationSeconds * (user.initialWaveOnline ? 110 : 180);
-    const modifier = 1 - assignment.reconnectProbability * 0.55;
-    return Math.round(Math.max(6_000, base * modifier + this.randomInt(2_000, 14_000)));
+    return Math.round(Math.max(6_000, base + this.randomInt(2_000, 14_000)));
   }
 
   private percentile95(latencies: number[]): number {

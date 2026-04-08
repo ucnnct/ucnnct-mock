@@ -18,9 +18,7 @@ const assignmentSchema = z
     thinkTimeMinMs: z.number().int().min(0).max(60_000),
     thinkTimeMaxMs: z.number().int().min(0).max(60_000),
     initialOnlineRatio: z.number().min(0).max(1),
-    websocketRatio: z.number().min(0).max(1),
     avgSessionDurationSeconds: z.number().int().min(30).max(7_200),
-    reconnectProbability: z.number().min(0).max(1),
     weights: z.object({
       browse: z.number().min(0).max(100),
       privateMessage: z.number().min(0).max(100),
@@ -30,9 +28,7 @@ const assignmentSchema = z
       notificationCheck: z.number().min(0).max(100)
     }),
     media: z.object({
-      uploadProbability: z.number().min(0).max(1),
-      minFileSizeKb: z.number().int().min(1).max(10_240),
-      maxFileSizeKb: z.number().int().min(1).max(102_400)
+      uploadProbability: z.number().min(0).max(1)
     }),
     targetBaseUrl: z.string().url().optional(),
     assignedUsers: z
@@ -53,14 +49,6 @@ const assignmentSchema = z
         code: z.ZodIssueCode.custom,
         path: ['thinkTimeMaxMs'],
         message: 'thinkTimeMaxMs must be greater than or equal to thinkTimeMinMs'
-      });
-    }
-
-    if (assignment.media.maxFileSizeKb < assignment.media.minFileSizeKb) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['media', 'maxFileSizeKb'],
-        message: 'maxFileSizeKb must be greater than or equal to minFileSizeKb'
       });
     }
   });

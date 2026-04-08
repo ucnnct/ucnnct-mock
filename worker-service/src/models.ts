@@ -45,8 +45,6 @@ export interface BehaviorWeights {
 
 export interface MediaProfile {
   uploadProbability: number;
-  minFileSizeKb: number;
-  maxFileSizeKb: number;
 }
 
 export interface AssignedMockUserIdentity {
@@ -67,9 +65,7 @@ export interface WorkerAssignmentInput {
   thinkTimeMinMs: number;
   thinkTimeMaxMs: number;
   initialOnlineRatio: number;
-  websocketRatio: number;
   avgSessionDurationSeconds: number;
-  reconnectProbability: number;
   weights: BehaviorWeights;
   media: MediaProfile;
   targetBaseUrl?: string;
