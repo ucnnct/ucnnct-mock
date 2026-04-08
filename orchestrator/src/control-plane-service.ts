@@ -240,18 +240,27 @@ export class ControlPlaneService {
       })
       .map(([runId]) => runId);
 
+    const liveRunIds = new Set<string>([
+      ...groupedAssignments.keys(),
+      ...this.bootstrapRuns.keys(),
+      ...this.stoppingRuns.keys()
+    ]);
+    const leasesToRelease = leases.filter(
+      (lease) =>
+        lease.state === 'active' &&
+        (completedRunIds.includes(lease.runId) || !liveRunIds.has(lease.runId))
+    );
+
     let currentLeases = leases;
-    if (leases.some((lease) => lease.state === 'active' && completedRunIds.includes(lease.runId))) {
+    if (leasesToRelease.length > 0) {
       await Promise.all(
-        leases
-          .filter((lease) => lease.state === 'active' && completedRunIds.includes(lease.runId))
-          .map((lease) =>
-            this.safeJson(
-              `${this.mockUserOrigin}/api/v1/mock-users/runs/${lease.runId}/release`,
-              null,
-              { method: 'POST' }
-            )
+        leasesToRelease.map((lease) =>
+          this.safeJson(
+            `${this.mockUserOrigin}/api/v1/mock-users/runs/${lease.runId}/release`,
+            null,
+            { method: 'POST' }
           )
+        )
       );
       currentLeases = await this.safeJson<LeaseRecord[]>(
         `${this.mockUserOrigin}/api/v1/mock-users/leases`,
