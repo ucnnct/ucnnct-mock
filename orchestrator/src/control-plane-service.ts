@@ -280,7 +280,13 @@ export class ControlPlaneService {
     const dashboard = this.buildDashboard(runs, services, workerSources, workerNodes);
 
     if (
-      runs.every((run) => run.status !== 'running' && run.status !== 'paused') &&
+      runs.every(
+        (run) =>
+          run.status !== 'starting' &&
+          run.status !== 'running' &&
+          run.status !== 'paused' &&
+          run.status !== 'stopping'
+      ) &&
       this.workerController.enabled
     ) {
       void this.workerController.restoreAutoscaling().catch(() => undefined);
