@@ -2,7 +2,7 @@ import { CommonModule } from '@angular/common';
 import { Component, computed, inject, signal } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { FormBuilder, ReactiveFormsModule } from '@angular/forms';
-import { startWith } from 'rxjs/operators';
+import { map, startWith } from 'rxjs/operators';
 import { RunDraftInput } from '../../core/models/control-plane.models';
 import { ControlPlaneStore } from '../../core/services/control-plane.store';
 
@@ -25,6 +25,7 @@ export class RunsPageComponent {
     rampUpSeconds: 120,
     thinkTimeMinMs: 800,
     thinkTimeMaxMs: 5000,
+    gradualOnline: false,
     initialOnlineRatio: 0.75,
     avgSessionDurationSeconds: 420,
     weights: this.fb.nonNullable.group({
@@ -40,11 +41,33 @@ export class RunsPageComponent {
     })
   });
 
-  private readonly formValue = toSignal(this.form.valueChanges.pipe(startWith(this.form.getRawValue())), {
+  private readonly formValue = toSignal(
+    this.form.valueChanges.pipe(
+      map(() => this.form.getRawValue()),
+      startWith(this.form.getRawValue())
+    ),
+    {
     initialValue: this.form.getRawValue()
-  });
+    }
+  );
 
-  protected readonly preview = computed<RunDraftInput>(() => this.formValue() as RunDraftInput);
+  protected readonly gradualOnlineEnabled = computed(() => this.formValue().gradualOnline);
+  protected readonly preview = computed<RunDraftInput>(() => {
+    const value = this.formValue();
+    return {
+      runName: value.runName,
+      environment: value.environment,
+      virtualUsers: value.virtualUsers,
+      durationSeconds: value.durationSeconds,
+      rampUpSeconds: value.rampUpSeconds,
+      thinkTimeMinMs: value.thinkTimeMinMs,
+      thinkTimeMaxMs: value.thinkTimeMaxMs,
+      initialOnlineRatio: value.gradualOnline ? value.initialOnlineRatio : 1,
+      avgSessionDurationSeconds: value.avgSessionDurationSeconds,
+      weights: value.weights,
+      media: value.media
+    };
+  });
   protected readonly planner = this.store.planner;
   protected readonly totalWeight = computed(() => {
     const weights = this.preview().weights;
@@ -107,6 +130,7 @@ export class RunsPageComponent {
         virtualUsers: 300,
         durationSeconds: 900,
         rampUpSeconds: 120,
+        gradualOnline: false,
         weights: { browse: 20, privateMessage: 30, group: 20, media: 10, social: 10, notificationCheck: 10 },
         media: { uploadProbability: 0.08 }
       });
@@ -119,6 +143,7 @@ export class RunsPageComponent {
         virtualUsers: 420,
         durationSeconds: 720,
         rampUpSeconds: 90,
+        gradualOnline: false,
         weights: { browse: 14, privateMessage: 40, group: 24, media: 4, social: 8, notificationCheck: 10 },
         media: { uploadProbability: 0.03 }
       });
@@ -131,6 +156,7 @@ export class RunsPageComponent {
         virtualUsers: 10_000,
         durationSeconds: 900,
         rampUpSeconds: 300,
+        gradualOnline: false,
         avgSessionDurationSeconds: 480,
         weights: { browse: 18, privateMessage: 28, group: 22, media: 8, social: 12, notificationCheck: 12 },
         media: { uploadProbability: 0.04 }
@@ -143,6 +169,7 @@ export class RunsPageComponent {
       virtualUsers: 180,
       durationSeconds: 600,
       rampUpSeconds: 75,
+      gradualOnline: false,
       weights: { browse: 12, privateMessage: 24, group: 16, media: 32, social: 6, notificationCheck: 10 },
       media: { uploadProbability: 0.22 }
     });

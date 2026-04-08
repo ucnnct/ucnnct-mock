@@ -61,9 +61,18 @@
           <span>Think time max (ms)</span>
           <input type="number" formControlName="thinkTimeMaxMs" min="0" />
         </label>
-        <label class="field">
-          <span>Initial online ratio</span>
+        <label class="field field--checkbox">
+          <input type="checkbox" formControlName="gradualOnline" />
+          <span>Gradual online</span>
+        </label>
+        <label class="field" *ngIf="gradualOnlineEnabled()">
+          <span>Online proportion at start</span>
           <input type="number" formControlName="initialOnlineRatio" min="0" max="1" step="0.01" />
+          <small class="muted">Use this only if you want a fraction of users to start online before the rest join.</small>
+        </label>
+        <label class="field" *ngIf="!gradualOnlineEnabled()">
+          <span>Online start mode</span>
+          <input type="text" value="All users start online" readonly />
           <small class="muted">Every authenticated user initializes a realtime websocket session on staging.</small>
         </label>
       </div>
