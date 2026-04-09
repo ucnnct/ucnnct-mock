@@ -724,6 +724,7 @@ export class ControlPlaneService {
     const assignmentCounts = new Map<string, number>();
     const targetBackoffUntil = new Map<string, number>();
     const dispatchDeadline = Date.now() + 600_000;
+    const preferDistinctTargets = plan.workerShards <= plan.targetWorkerReplicas;
     let latestTargets = initialTargets;
 
     while (pendingShards.length > 0) {
@@ -754,9 +755,40 @@ export class ControlPlaneService {
         const rightCount = assignmentCounts.get(right.name) ?? 0;
         return leftCount - rightCount || left.name.localeCompare(right.name);
       });
+      const freshTargets = orderedTargets.filter((target) => (assignmentCounts.get(target.name) ?? 0) === 0);
+      const assignedTargets = Array.from(assignmentCounts.values()).filter((count) => count > 0).length;
+
+      if (preferDistinctTargets && freshTargets.length === 0 && assignedTargets < plan.workerShards) {
+        this.updateBootstrapRun(runId, (summary) => ({
+          ...summary,
+          updatedAt: new Date().toISOString(),
+          events: [
+            {
+              id: `bootstrap-hold-${crypto.randomUUID().slice(0, 8)}`,
+              timestamp: new Date().toISOString(),
+              severity: 'info' as const,
+              title: 'Waiting for distinct worker pods',
+              detail: `${assignedTargets}/${plan.workerShards} shards are pinned to unique worker pods; dispatch is waiting for more ready pods before assigning the remaining shards.`
+            },
+            ...summary.events
+          ].slice(0, 10)
+        }));
+
+        if (Date.now() >= dispatchDeadline) {
+          throw new Error(
+            `Timed out while waiting for ${plan.workerShards - assignedTargets} additional ready worker pods to host the remaining shards.`
+          );
+        }
+
+        await this.sleep(2_000);
+        continue;
+      }
+
+      const dispatchTargets =
+        preferDistinctTargets && freshTargets.length > 0 ? freshTargets : orderedTargets;
 
       let dispatchedThisPass = 0;
-      for (const target of orderedTargets) {
+      for (const target of dispatchTargets) {
         const pending = pendingShards.shift();
         if (!pending) {
           break;

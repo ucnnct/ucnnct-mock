@@ -277,11 +277,9 @@ export class WorkerEngine {
       progressPercent: Math.round((elapsedMs / (assignment.durationSeconds * 1_000)) * 100)
     };
 
-    const activeUsers = users.filter(
-      (user) => elapsedMs >= user.activationOffsetMs && user.nextActionAtMs <= now + TICK_MS * 2
-    ).length;
     const authenticatedUsers = users.filter((user) => user.authenticated).length;
     const connectedUsers = users.filter((user) => user.connectedToWs).length;
+    const activeUsers = authenticatedUsers;
     const liveAggregate = this.aggregateLiveTraffic(assignment.id, users);
 
     const stepRequestsPerSecond = tickRequestCost.reduce((sum, value) => sum + value, 0) / (TICK_MS / 1_000);
@@ -335,10 +333,6 @@ export class WorkerEngine {
   ): WorkerAssignmentRuntime {
     const createdAtMs = meta.createdAtMs;
     const users = this.buildUsers(input, createdAtMs);
-    const initiallyActiveUsers = users.filter(
-      (user) => user.activationOffsetMs === 0 && user.nextActionAtMs <= createdAtMs + TICK_MS * 2
-    ).length;
-
     return {
       ...input,
       id: meta.id,
@@ -348,7 +342,7 @@ export class WorkerEngine {
       updatedAtMs: createdAtMs,
       elapsedSeconds: 0,
       progressPercent: meta.status === 'completed' ? 100 : 0,
-      activeUsers: initiallyActiveUsers,
+      activeUsers: 0,
       authenticatedUsers: 0,
       connectedUsers: 0,
       requestsPerSecond: 0,
