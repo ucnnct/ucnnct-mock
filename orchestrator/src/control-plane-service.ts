@@ -722,7 +722,8 @@ export class ControlPlaneService {
       assignedUsers: identityBuckets[index]
     }));
     const assignmentCounts = new Map<string, number>();
-    const dispatchDeadline = Date.now() + 300_000;
+    const targetBackoffUntil = new Map<string, number>();
+    const dispatchDeadline = Date.now() + 600_000;
     let latestTargets = initialTargets;
 
     while (pendingShards.length > 0) {
@@ -743,7 +744,12 @@ export class ControlPlaneService {
         continue;
       }
 
-      const orderedTargets = [...latestTargets].sort((left, right) => {
+      const now = Date.now();
+      const readyTargets = latestTargets.filter(
+        (target) => (targetBackoffUntil.get(target.name) ?? 0) <= now
+      );
+      const targetsForPass = readyTargets.length > 0 ? readyTargets : latestTargets;
+      const orderedTargets = [...targetsForPass].sort((left, right) => {
         const leftCount = assignmentCounts.get(left.name) ?? 0;
         const rightCount = assignmentCounts.get(right.name) ?? 0;
         return leftCount - rightCount || left.name.localeCompare(right.name);
@@ -756,33 +762,58 @@ export class ControlPlaneService {
           break;
         }
 
-        const assignment = await this.httpJson<WorkerAssignment>(
-          `${target.baseUrl}/api/v1/worker/assignments`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              runId,
-              assignmentLabel: plan.input.runName,
-              environment: plan.input.environment,
-              virtualUsers: pending.virtualUsers,
-              durationSeconds: plan.input.durationSeconds,
-              rampUpSeconds: plan.input.rampUpSeconds,
-              thinkTimeMinMs: plan.input.thinkTimeMinMs,
-              thinkTimeMaxMs: plan.input.thinkTimeMaxMs,
-              initialOnlineRatio: plan.input.initialOnlineRatio,
-              avgSessionDurationSeconds: plan.input.avgSessionDurationSeconds,
-              weights: plan.input.weights,
-              media: plan.input.media,
-              targetBaseUrl: 'https://staging.uconnect.cc',
-              assignedUsers: pending.assignedUsers
-            })
-          }
-        );
+        try {
+          const assignment = await this.httpJson<WorkerAssignment>(
+            `${target.baseUrl}/api/v1/worker/assignments`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                runId,
+                assignmentLabel: plan.input.runName,
+                environment: plan.input.environment,
+                virtualUsers: pending.virtualUsers,
+                durationSeconds: plan.input.durationSeconds,
+                rampUpSeconds: plan.input.rampUpSeconds,
+                thinkTimeMinMs: plan.input.thinkTimeMinMs,
+                thinkTimeMaxMs: plan.input.thinkTimeMaxMs,
+                initialOnlineRatio: plan.input.initialOnlineRatio,
+                avgSessionDurationSeconds: plan.input.avgSessionDurationSeconds,
+                weights: plan.input.weights,
+                media: plan.input.media,
+                targetBaseUrl: 'https://staging.uconnect.cc',
+                assignedUsers: pending.assignedUsers
+              })
+            },
+            60_000
+          );
 
-        assignmentCounts.set(target.name, (assignmentCounts.get(target.name) ?? 0) + 1);
-        createdAssignments.push({ target, assignmentId: assignment.id });
-        dispatchedThisPass += 1;
+          targetBackoffUntil.delete(target.name);
+          assignmentCounts.set(target.name, (assignmentCounts.get(target.name) ?? 0) + 1);
+          createdAssignments.push({ target, assignmentId: assignment.id });
+          dispatchedThisPass += 1;
+        } catch (error) {
+          pendingShards.push(pending);
+          targetBackoffUntil.set(target.name, Date.now() + 15_000);
+          this.updateBootstrapRun(runId, (summary) => ({
+            ...summary,
+            updatedAt: new Date().toISOString(),
+            events: [
+              {
+                id: `bootstrap-retry-${crypto.randomUUID().slice(0, 8)}`,
+                timestamp: new Date().toISOString(),
+                severity: 'warning' as const,
+                title: 'Retrying a slow worker pod',
+                detail: `${target.name} did not accept a shard yet; it was placed in temporary backoff while dispatch continues on the other ready workers.`
+              },
+              ...summary.events
+            ].slice(0, 10)
+          }));
+          console.warn(
+            `[control-plane] ${target.name} did not accept shard ${pending.index + 1}/${plan.workerShards} for ${runId}:`,
+            error instanceof Error ? error.message : error
+          );
+        }
       }
 
       this.updateBootstrapRun(runId, (summary) => ({
