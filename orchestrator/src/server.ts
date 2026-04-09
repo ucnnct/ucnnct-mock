@@ -39,7 +39,16 @@ app.use(
 );
 app.use(express.json());
 
-app.get('/health', async (_req, res) => {
+app.get('/health', (_req, res) => {
+  res.json({
+    service: 'orchestrator',
+    status: 'ok',
+    environment: 'staging',
+    generatedAt: new Date().toISOString()
+  });
+});
+
+app.get('/api/v1/control-plane/health', async (_req, res) => {
   res.json(await controlPlane.health());
 });
 

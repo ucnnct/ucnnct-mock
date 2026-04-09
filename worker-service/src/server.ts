@@ -62,14 +62,11 @@ app.use(
 app.use(express.json());
 
 app.get('/health', (_req, res) => {
-  const runtime = engine.getRuntime();
   res.json({
-    service: runtime.service,
+    service: 'worker-service',
     status: 'ok',
     environment: 'staging',
-    activeAssignments: runtime.activeAssignments,
-    runningUsers: runtime.runningUsers,
-    generatedAt: runtime.generatedAt
+    generatedAt: new Date().toISOString()
   });
 });
 
