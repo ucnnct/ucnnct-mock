@@ -1,6 +1,6 @@
 {
   "name": "orchestrator",
-  "version": "0.8.2",
+  "version": "0.8.3",
   "description": "In-memory control plane orchestrator for the UConnect mock platform.",
   "main": "dist/server.js",
   "scripts": {
