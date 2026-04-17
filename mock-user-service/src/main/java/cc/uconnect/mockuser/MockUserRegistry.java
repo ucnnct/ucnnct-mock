@@ -54,7 +54,6 @@ public class MockUserRegistry {
           "mock-user-service now requires staging-backed identities. Set STAGING_IDENTITY_PROVISION_ENABLED=true."
       );
     }
-    seedUsers();
     seedFixtures();
   }
 
@@ -170,10 +169,6 @@ public class MockUserRegistry {
     users.values().stream()
         .filter((user) -> leaseId.equals(user.leaseId))
         .forEach((user) -> user.leaseId = null);
-  }
-
-  private void seedUsers() {
-    synchronizeUsers(initialUserCount);
   }
 
   private void ensureAvailableUsers(int requestedUsers) {
