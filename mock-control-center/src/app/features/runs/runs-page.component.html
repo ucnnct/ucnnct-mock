@@ -5,7 +5,7 @@
       <h2>Compose one realistic user population and launch it on staging</h2>
       <p class="muted">
         The run builder stays focused on one generic user engine. The number of virtual users stays fully operator-defined,
-        and the planner derives shards, leased identities and target worker replicas from that input.
+        and the planner derives shards, dedicated staging identities and target worker replicas from that input.
       </p>
     </div>
 
@@ -137,7 +137,7 @@
             <div class="metric-value">{{ plannedRun().requestedUsers }}</div>
           </article>
           <article class="metric-card">
-            <span class="metric-label">Leased identities</span>
+            <span class="metric-label">Dedicated identities</span>
             <div class="metric-value">{{ plannedRun().leasedIdentities }}</div>
           </article>
           <article class="metric-card">
@@ -202,7 +202,7 @@
 
           <div class="run-card-metrics">
             <span>{{ run.workerShards }} shards</span>
-            <span>{{ run.leasedIdentities }} identities</span>
+            <span>{{ run.leasedIdentities }} dedicated identities</span>
             <span>{{ run.targetWorkerReplicas }} workers</span>
           </div>
 
@@ -225,7 +225,7 @@
 
         <div class="detail-grid">
           <div><strong>{{ run.virtualUsers }}</strong><span>virtual users</span></div>
-          <div><strong>{{ run.leasedIdentities }}</strong><span>leased identities</span></div>
+          <div><strong>{{ run.leasedIdentities }}</strong><span>dedicated identities</span></div>
           <div><strong>{{ run.workerShards }}</strong><span>worker shards</span></div>
           <div><strong>{{ run.targetWorkerReplicas }}</strong><span>target workers</span></div>
           <div><strong>{{ run.connectedUsers }}</strong><span>connected users</span></div>

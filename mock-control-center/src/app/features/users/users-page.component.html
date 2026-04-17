@@ -4,9 +4,9 @@
       <span class="eyebrow">Mock users</span>
       <h2>Identity capacity, credentials and behavioral lease readiness</h2>
       <p class="muted">
-        Each mock user is just a staging identity plus a behavioral engine. The worker-service does
-        not receive static batches or fixed scenarios. It leases generic identities here, then lets
-        the behavior model decide what each user does on the platform.
+        Each virtual user now receives its own dedicated staging identity for the full run. The
+        worker-service does not receive static scenarios. It leases real identities here, then lets
+        the behavioral engine decide what each user does on the platform.
       </p>
     </div>
   </article>
@@ -46,11 +46,11 @@
         </div>
         <div class="capacity-row">
           <strong>{{ runtime.availableUsers }}</strong>
-          <span>immediately leasable users for the next run</span>
+          <span>immediately leasable staging identities for the next run</span>
         </div>
         <div class="capacity-row">
           <strong>{{ runtime.leasedUsers }}</strong>
-          <span>users currently reserved by active runs</span>
+          <span>dedicated identities currently reserved by active runs</span>
         </div>
         <div class="capacity-row">
           <strong>{{ runtime.activeLeases }}</strong>

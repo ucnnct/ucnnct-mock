@@ -113,8 +113,8 @@
       </div>
 
       <p class="muted">
-        Planner shard size: {{ store.planner().workerShardSize }} users per shard. Identity reuse factor:
-        1 real staging identity for roughly {{ store.planner().identityReuseFactor }} virtual users.
+        Planner shard size: {{ store.planner().workerShardSize }} users per shard. Every virtual user now leases
+        one dedicated staging identity for the full run.
       </p>
 
       <div class="worker-list">

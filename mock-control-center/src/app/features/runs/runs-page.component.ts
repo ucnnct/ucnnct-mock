@@ -104,10 +104,7 @@ export class RunsPageComponent {
       planner.workerMaxReplicas,
       Math.max(planner.workerMinReplicas, workerShards)
     );
-    const leasedIdentities = Math.min(
-      requestedUsers,
-      Math.max(targetWorkerReplicas, Math.ceil(requestedUsers / planner.identityReuseFactor))
-    );
+    const leasedIdentities = requestedUsers;
 
     return {
       requestedUsers,

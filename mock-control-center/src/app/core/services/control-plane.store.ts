@@ -43,7 +43,6 @@ export class ControlPlaneStore {
     return (
       this.snapshot()?.planner ?? {
         workerShardSize: 250,
-        identityReuseFactor: 25,
         workerMinReplicas: 2,
         workerMaxReplicas: 40,
         maxVirtualUsers: 10_000
