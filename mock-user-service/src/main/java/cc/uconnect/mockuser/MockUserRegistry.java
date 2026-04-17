@@ -172,6 +172,8 @@ public class MockUserRegistry {
   }
 
   private void ensureAvailableUsers(int requestedUsers) {
+    hydrateExistingUsersIfNeeded();
+
     int desiredTotal;
     synchronized (this) {
       int availableUsers = availableUserCount();
@@ -202,6 +204,34 @@ public class MockUserRegistry {
       List<ProvisionedMockUser> provisionedUsers = provisioner.provisionRange(startIndex, desiredTotal);
       synchronized (this) {
         for (ProvisionedMockUser user : provisionedUsers) {
+          users.putIfAbsent(user.id(), new MockUserEntity(
+              user.id(),
+              user.username(),
+              user.displayName(),
+              user.email(),
+              user.password()
+          ));
+        }
+      }
+    } finally {
+      provisioningLock.unlock();
+    }
+  }
+
+  private void hydrateExistingUsersIfNeeded() {
+    if (currentUserCount() > 0) {
+      return;
+    }
+
+    provisioningLock.lock();
+    try {
+      if (currentUserCount() > 0) {
+        return;
+      }
+
+      List<ProvisionedMockUser> discoveredUsers = provisioner.discoverExistingUsers(targetUserCount);
+      synchronized (this) {
+        for (ProvisionedMockUser user : discoveredUsers) {
           users.putIfAbsent(user.id(), new MockUserEntity(
               user.id(),
               user.username(),
@@ -295,6 +325,7 @@ public class MockUserRegistry {
     long backoffMs = 2_000L;
 
     try {
+      hydrateExistingUsersIfNeeded();
       while (!Thread.currentThread().isInterrupted()) {
         int currentCount = currentUserCount();
         if (currentCount >= targetUserCount) {

@@ -12,7 +12,9 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -82,6 +84,69 @@ public class StagingIdentityProvisioner {
     provisionedUsers.sort(Comparator.comparing(ProvisionedMockUser::username));
     log.info("Provisioned {} staging-backed mock identities", provisionedUsers.size());
     return provisionedUsers;
+  }
+
+  public List<ProvisionedMockUser> discoverExistingUsers(int upToIndex) {
+    if (!isEnabled() || upToIndex < 1) {
+      return List.of();
+    }
+
+    String defaultPassword = required("staging.identity.default-password");
+    String prefix = environment.getProperty("staging.identity.username-prefix", "mock.staging");
+    String usernamePrefix = prefix + ".";
+    AdminSession adminSession = fetchAdminSession();
+    Map<Integer, ProvisionedMockUser> discoveredUsers = new LinkedHashMap<>();
+    int pageSize = 500;
+
+    for (int first = 0; first <= upToIndex + pageSize; first += pageSize) {
+      final int currentFirst = first;
+      JsonNode page = withAdminRetry(adminSession, () -> searchUsers(adminSession.token(), prefix, currentFirst, pageSize));
+      if (!page.isArray() || page.isEmpty()) {
+        break;
+      }
+
+      for (JsonNode candidate : page) {
+        String username = candidate.path("username").asText();
+        if (!username.startsWith(usernamePrefix)) {
+          continue;
+        }
+
+        int index = parseUsernameIndex(username, usernamePrefix);
+        if (index < 1 || index > upToIndex) {
+          continue;
+        }
+
+        String userId = candidate.path("id").asText();
+        if (userId == null || userId.isBlank()) {
+          continue;
+        }
+
+        String firstName = candidate.path("firstName").asText("");
+        String lastName = candidate.path("lastName").asText("");
+        String displayName = (firstName + " " + lastName).trim();
+        if (displayName.isBlank()) {
+          displayName = "Mock User " + index;
+        }
+
+        String email = candidate.path("email").asText(username + "@mock.uconnect.cc");
+        discoveredUsers.put(index, new ProvisionedMockUser(
+            userId,
+            username,
+            displayName,
+            email,
+            defaultPassword
+        ));
+      }
+
+      if (page.size() < pageSize) {
+        break;
+      }
+    }
+
+    List<ProvisionedMockUser> users = new ArrayList<>(discoveredUsers.values());
+    users.sort(Comparator.comparing(ProvisionedMockUser::username));
+    log.info("Discovered {} existing staging-backed mock identities", users.size());
+    return users;
   }
 
   private List<ProvisionedMockUser> provisionBatch(
@@ -302,6 +367,18 @@ public class StagingIdentityProvisioner {
     return null;
   }
 
+  private JsonNode searchUsers(String adminToken, String prefix, int first, int max) {
+    String query = "?search=" + urlEncode(prefix) + "&first=" + first + "&max=" + max;
+    HttpRequest request = HttpRequest.newBuilder(URI.create(adminUsersEndpoint().toString() + query))
+        .header("Authorization", "Bearer " + adminToken)
+        .header("Accept", "application/json")
+        .GET()
+        .timeout(Duration.ofSeconds(20))
+        .build();
+
+    return readJson(send(request, 200, "search users by prefix " + prefix));
+  }
+
   private HttpResponse<String> send(HttpRequest request, int expectedStatus, String context) {
     HttpResponse<String> response = sendAllowing(request, List.of(expectedStatus), context);
     if (response.statusCode() != expectedStatus) {
@@ -367,6 +444,15 @@ public class StagingIdentityProvisioner {
 
   private String buildDisplayName(int index) {
     return "Mock User " + index;
+  }
+
+  private int parseUsernameIndex(String username, String prefix) {
+    String suffix = username.substring(prefix.length());
+    try {
+      return Integer.parseInt(suffix);
+    } catch (NumberFormatException exception) {
+      return -1;
+    }
   }
 
   private String[] splitDisplayName(String displayName) {
