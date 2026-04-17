@@ -20,6 +20,7 @@ import { StagingRealtimeDriver } from './staging-realtime.js';
 const TICK_MS = 2_000;
 const USER_SNAPSHOT_LIMIT = 18;
 const MAX_RECENT_EVENTS = 30;
+const MAX_HISTORICAL_ASSIGNMENTS = 12;
 
 type VirtualUserState = Omit<
   VirtualUserSnapshot,
@@ -165,7 +166,14 @@ export class WorkerEngine {
       )
     );
 
-    this.assignments = [runtime, ...this.assignments].slice(0, 12);
+    const liveAssignments = this.assignments.filter(
+      (assignment) => assignment.status === 'running' || assignment.status === 'paused'
+    );
+    const historicalAssignments = this.assignments
+      .filter((assignment) => assignment.status === 'completed' || assignment.status === 'failed')
+      .slice(0, MAX_HISTORICAL_ASSIGNMENTS);
+
+    this.assignments = [runtime, ...liveAssignments, ...historicalAssignments];
     return this.toSnapshot(runtime);
   }
 
