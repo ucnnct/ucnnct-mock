@@ -11,7 +11,13 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.env.Environment;
@@ -47,21 +53,54 @@ public class StagingIdentityProvisioner {
     }
 
     String defaultPassword = required("staging.identity.default-password");
-    String adminToken = fetchAdminToken();
-    List<ProvisionedMockUser> provisionedUsers = new ArrayList<>();
+    int concurrency = environment.getProperty("mock.users.provision-concurrency", Integer.class, 16);
+    int batchSize = environment.getProperty("mock.users.provision-batch-size", Integer.class, 40);
+    List<ProvisionedMockUser> provisionedUsers = new ArrayList<>(toIndex - fromIndex + 1);
+    ExecutorService executor = Executors.newFixedThreadPool(Math.max(1, concurrency));
+    List<Future<List<ProvisionedMockUser>>> futures = new ArrayList<>();
+
+    for (int batchStart = fromIndex; batchStart <= toIndex; batchStart += batchSize) {
+      int currentBatchStart = batchStart;
+      int batchEnd = Math.min(toIndex, batchStart + batchSize - 1);
+      futures.add(executor.submit(() -> provisionBatch(currentBatchStart, batchEnd, defaultPassword)));
+    }
+
+    try {
+      for (Future<List<ProvisionedMockUser>> future : futures) {
+        provisionedUsers.addAll(future.get());
+      }
+    } catch (InterruptedException exception) {
+      Thread.currentThread().interrupt();
+      throw new IllegalStateException("Interrupted while provisioning staging-backed identities.", exception);
+    } catch (ExecutionException exception) {
+      throw unwrapProvisioningFailure(exception);
+    } finally {
+      executor.shutdownNow();
+    }
+
+    provisionedUsers.sort(Comparator.comparing(ProvisionedMockUser::username));
+    log.info("Provisioned {} staging-backed mock identities", provisionedUsers.size());
+    return provisionedUsers;
+  }
+
+  private List<ProvisionedMockUser> provisionBatch(int fromIndex, int toIndex, String defaultPassword) {
+    AdminSession adminSession = fetchAdminSession();
+    List<ProvisionedMockUser> batch = new ArrayList<>(toIndex - fromIndex + 1);
 
     for (int index = fromIndex; index <= toIndex; index += 1) {
       String username = buildUsername(index);
       String email = username + "@mock.uconnect.cc";
       String displayName = buildDisplayName(index);
 
-      String userId = ensureUser(adminToken, username, email, displayName);
-      ensurePassword(adminToken, userId, defaultPassword);
-      String accessToken = fetchUserToken(username, defaultPassword);
-      waitForBusinessProfile(accessToken, userId);
+      EnsureUserResult user = ensureUser(adminSession, username, email, displayName);
+      ensurePassword(adminSession, user.userId(), defaultPassword);
+      if (user.created()) {
+        String accessToken = fetchUserToken(username, defaultPassword);
+        waitForBusinessProfile(accessToken, user.userId());
+      }
 
-      provisionedUsers.add(new ProvisionedMockUser(
-          userId,
+      batch.add(new ProvisionedMockUser(
+          user.userId(),
           username,
           displayName,
           email,
@@ -69,11 +108,10 @@ public class StagingIdentityProvisioner {
       ));
     }
 
-    log.info("Provisioned {} staging-backed mock identities", provisionedUsers.size());
-    return provisionedUsers;
+    return batch;
   }
 
-  private String fetchAdminToken() {
+  private AdminSession fetchAdminSession() {
     String body = formEncode(
         "grant_type", "password",
         "client_id", required("staging.identity.admin-client-id"),
@@ -92,68 +130,77 @@ public class StagingIdentityProvisioner {
     if (accessToken == null || accessToken.asText().isBlank()) {
       throw new IllegalStateException("Keycloak admin token response did not contain access_token.");
     }
-    return accessToken.asText();
-  }
-
-  private String ensureUser(String adminToken, String username, String email, String displayName) {
-    JsonNode existing = findUserByUsername(adminToken, username);
-    if (existing != null) {
-      String existingId = existing.path("id").asText();
-      if (existingId == null || existingId.isBlank()) {
-        throw new IllegalStateException("Existing Keycloak user is missing id for username " + username);
-      }
-      return existingId;
-    }
-
-    String[] names = splitDisplayName(displayName);
-    String payload = """
-        {
-          "username": "%s",
-          "email": "%s",
-          "enabled": true,
-          "emailVerified": true,
-          "firstName": "%s",
-          "lastName": "%s"
-        }
-        """.formatted(
-        json(username),
-        json(email),
-        json(names[0]),
-        json(names[1])
+    long expiresInSeconds = json.path("expires_in").asLong(60L);
+    return new AdminSession(
+        accessToken.asText(),
+        System.currentTimeMillis() + Math.max(15_000L, (expiresInSeconds - 5L) * 1_000L)
     );
-
-    HttpRequest request = HttpRequest.newBuilder(adminUsersEndpoint())
-        .header("Authorization", "Bearer " + adminToken)
-        .header("Content-Type", "application/json")
-        .POST(HttpRequest.BodyPublishers.ofString(payload))
-        .timeout(Duration.ofSeconds(12))
-        .build();
-
-    send(request, 201, "create user " + username);
-    JsonNode created = findUserByUsername(adminToken, username);
-    if (created == null || created.path("id").asText().isBlank()) {
-      throw new IllegalStateException("Unable to resolve Keycloak id after creating " + username);
-    }
-    return created.path("id").asText();
   }
 
-  private void ensurePassword(String adminToken, String userId, String password) {
-    String payload = """
-        {
-          "type": "password",
-          "value": "%s",
-          "temporary": false
+  private EnsureUserResult ensureUser(AdminSession adminSession, String username, String email, String displayName) {
+    return withAdminRetry(adminSession, () -> {
+      JsonNode existing = findUserByUsername(adminSession.token(), username);
+      if (existing != null) {
+        String existingId = existing.path("id").asText();
+        if (existingId == null || existingId.isBlank()) {
+          throw new IllegalStateException("Existing Keycloak user is missing id for username " + username);
         }
-        """.formatted(json(password));
+        return new EnsureUserResult(existingId, false);
+      }
 
-    HttpRequest request = HttpRequest.newBuilder(adminUserResetPasswordEndpoint(userId))
-        .header("Authorization", "Bearer " + adminToken)
-        .header("Content-Type", "application/json")
-        .PUT(HttpRequest.BodyPublishers.ofString(payload))
-        .timeout(Duration.ofSeconds(12))
-        .build();
+      String[] names = splitDisplayName(displayName);
+      String payload = """
+          {
+            "username": "%s",
+            "email": "%s",
+            "enabled": true,
+            "emailVerified": true,
+            "firstName": "%s",
+            "lastName": "%s"
+          }
+          """.formatted(
+          json(username),
+          json(email),
+          json(names[0]),
+          json(names[1])
+      );
 
-    send(request, 204, "reset password for " + userId);
+      HttpRequest request = HttpRequest.newBuilder(adminUsersEndpoint())
+          .header("Authorization", "Bearer " + adminSession.token())
+          .header("Content-Type", "application/json")
+          .POST(HttpRequest.BodyPublishers.ofString(payload))
+          .timeout(Duration.ofSeconds(12))
+          .build();
+
+      send(request, 201, "create user " + username);
+      JsonNode created = findUserByUsername(adminSession.token(), username);
+      if (created == null || created.path("id").asText().isBlank()) {
+        throw new IllegalStateException("Unable to resolve Keycloak id after creating " + username);
+      }
+      return new EnsureUserResult(created.path("id").asText(), true);
+    });
+  }
+
+  private void ensurePassword(AdminSession adminSession, String userId, String password) {
+    withAdminRetry(adminSession, () -> {
+      String payload = """
+          {
+            "type": "password",
+            "value": "%s",
+            "temporary": false
+          }
+          """.formatted(json(password));
+
+      HttpRequest request = HttpRequest.newBuilder(adminUserResetPasswordEndpoint(userId))
+          .header("Authorization", "Bearer " + adminSession.token())
+          .header("Content-Type", "application/json")
+          .PUT(HttpRequest.BodyPublishers.ofString(payload))
+          .timeout(Duration.ofSeconds(12))
+          .build();
+
+      send(request, 204, "reset password for " + userId);
+      return null;
+    });
   }
 
   private String fetchUserToken(String username, String password) {
@@ -243,7 +290,8 @@ public class StagingIdentityProvisioner {
     try {
       HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
       if (!allowedStatuses.contains(response.statusCode())) {
-        throw new IllegalStateException(
+        throw new UnexpectedHttpStatusException(
+            response.statusCode(),
             "Unexpected status for " + context + ": " + response.statusCode() + " body=" + response.body()
         );
       }
@@ -329,6 +377,79 @@ public class StagingIdentityProvisioner {
     return raw
         .replace("\\", "\\\\")
         .replace("\"", "\\\"");
+  }
+
+  private void ensureFreshSession(AdminSession session) {
+    if (session.expiresAtMs() - System.currentTimeMillis() <= 10_000L) {
+      AdminSession refreshed = fetchAdminSession();
+      session.token = refreshed.token;
+      session.expiresAtMs = refreshed.expiresAtMs;
+    }
+  }
+
+  private <T> T withAdminRetry(AdminSession initialSession, Callable<T> operation) {
+    ensureFreshSession(initialSession);
+    try {
+      return operation.call();
+    } catch (UnexpectedHttpStatusException exception) {
+      if (exception.statusCode() != 401) {
+        throw exception;
+      }
+      AdminSession session = fetchAdminSession();
+      try {
+        initialSession.token = session.token;
+        initialSession.expiresAtMs = session.expiresAtMs;
+        return operation.call();
+      } catch (UnexpectedHttpStatusException retryException) {
+        throw retryException;
+      } catch (Exception retryException) {
+        throw new IllegalStateException("Admin operation failed after token refresh.", retryException);
+      }
+    } catch (Exception exception) {
+      throw new IllegalStateException("Admin operation failed.", exception);
+    }
+  }
+
+  private IllegalStateException unwrapProvisioningFailure(ExecutionException exception) {
+    Throwable cause = exception.getCause();
+    if (cause instanceof IllegalStateException illegalStateException) {
+      return illegalStateException;
+    }
+    return new IllegalStateException("Provisioning failed.", cause);
+  }
+}
+
+final class AdminSession {
+  String token;
+  long expiresAtMs;
+
+  AdminSession(String token, long expiresAtMs) {
+    this.token = token;
+    this.expiresAtMs = expiresAtMs;
+  }
+
+  String token() {
+    return token;
+  }
+
+  long expiresAtMs() {
+    return expiresAtMs;
+  }
+}
+
+record EnsureUserResult(String userId, boolean created) {
+}
+
+final class UnexpectedHttpStatusException extends IllegalStateException {
+  private final int statusCode;
+
+  UnexpectedHttpStatusException(int statusCode, String message) {
+    super(message);
+    this.statusCode = statusCode;
+  }
+
+  int statusCode() {
+    return statusCode;
   }
 }
 
