@@ -176,7 +176,6 @@ export interface DashboardStats {
 
 export interface LoadPlannerConfig {
   workerShardSize: number;
-  identityReuseFactor: number;
   workerMinReplicas: number;
   workerMaxReplicas: number;
   maxVirtualUsers: number;

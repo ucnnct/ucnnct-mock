@@ -140,7 +140,6 @@ export class ControlPlaneService {
 
   private readonly planner: LoadPlannerConfig = {
     workerShardSize: Number(process.env.WORKER_SHARD_SIZE ?? 250),
-    identityReuseFactor: Number(process.env.IDENTITY_REUSE_FACTOR ?? 25),
     workerMinReplicas: Number(process.env.WORKER_MIN_REPLICAS ?? this.workerController.minReplicas),
     workerMaxReplicas: Number(process.env.WORKER_MAX_REPLICAS ?? this.workerController.maxReplicas),
     maxVirtualUsers: Number(process.env.MAX_VIRTUAL_USERS ?? 10_000)
@@ -152,7 +151,7 @@ export class ControlPlaneService {
       title: 'Angular control center',
       summary: 'Operators compose runs, preview shard plans, and monitor the autoscaled worker plane in one place.',
       bullets: [
-        'Run builder shows shard count, leased identities and requested worker replicas',
+        'Run builder shows shard count, required staging identities and requested worker replicas',
         'The entered virtual user count remains operator-defined',
         'All traffic remains scoped to staging'
       ],
@@ -161,7 +160,7 @@ export class ControlPlaneService {
     {
       id: 'control',
       title: 'Node orchestrator and planner',
-      summary: 'The orchestrator leases only the staging identities it needs, requests worker scale, then dispatches shards across the cluster.',
+      summary: 'The orchestrator leases one staging identity per virtual user, requests worker scale, then dispatches shards across the cluster.',
       bullets: [
         'Planner supports arbitrary volumes up to the configured ceiling',
         'In-cluster scale control for worker-service',
@@ -172,7 +171,7 @@ export class ControlPlaneService {
     {
       id: 'worker',
       title: 'Worker-service execution plane',
-      summary: 'The generic behavior engine runs on autoscaled worker pods and reuses leased staging identities within each shard.',
+      summary: 'The generic behavior engine runs on autoscaled worker pods and binds each virtual user to its own leased staging identity within each shard.',
       bullets: [
         'Mixed HTTP and websocket behavior',
         'Private, group, media and social actions',
@@ -449,7 +448,7 @@ export class ControlPlaneService {
             timestamp: new Date().toISOString(),
             severity: 'info' as const,
             title: 'Run plan prepared',
-            detail: `Planning ${plan.workerShards} shards, ${plan.leasedIdentities} leased identities, and ${plan.targetWorkerReplicas} target worker replicas for ${plan.input.virtualUsers} virtual users.`
+            detail: `Planning ${plan.workerShards} shards, ${plan.leasedIdentities} dedicated staging identities, and ${plan.targetWorkerReplicas} target worker replicas for ${plan.input.virtualUsers} virtual users.`
           },
           ...summary.events
         ].slice(0, 10)
@@ -516,7 +515,7 @@ export class ControlPlaneService {
       }
 
       const shardSizes = this.splitVirtualUsers(plan.input.virtualUsers, plan.workerShards);
-      const identityBuckets = this.partitionAssignedUsers(lease.assignedUsers, plan.workerShards);
+      const identityBuckets = this.partitionAssignedUsers(lease.assignedUsers, shardSizes);
       await this.dispatchAssignmentsProgressively(
         runId,
         plan,
@@ -579,13 +578,7 @@ export class ControlPlaneService {
       this.planner.workerMinReplicas,
       this.planner.workerMaxReplicas
     );
-    const leasedIdentities = Math.min(
-      input.virtualUsers,
-      Math.max(
-        targetWorkerReplicas,
-        Math.ceil(input.virtualUsers / Math.max(1, this.planner.identityReuseFactor))
-      )
-    );
+    const leasedIdentities = input.virtualUsers;
 
     return { input, shardSize, workerShards, targetWorkerReplicas, leasedIdentities };
   }
@@ -1131,14 +1124,24 @@ export class ControlPlaneService {
     return Array.from({ length: shardCount }, (_, index) => base + (index < remainder ? 1 : 0));
   }
 
-  private partitionAssignedUsers(assignedUsers: LeaseResponse['assignedUsers'], shardCount: number): LeaseResponse['assignedUsers'][] {
-    const buckets = Array.from({ length: shardCount }, () => [] as LeaseResponse['assignedUsers']);
-    assignedUsers.forEach((user, index) => {
-      buckets[index % shardCount]!.push(user);
+  private partitionAssignedUsers(
+    assignedUsers: LeaseResponse['assignedUsers'],
+    shardSizes: number[]
+  ): LeaseResponse['assignedUsers'][] {
+    const expectedUsers = shardSizes.reduce((sum, shardSize) => sum + shardSize, 0);
+    if (assignedUsers.length !== expectedUsers) {
+      throw new Error(
+        `Expected ${expectedUsers} dedicated staging identities for shard dispatch, but received ${assignedUsers.length}.`
+      );
+    }
+
+    const buckets: LeaseResponse['assignedUsers'][] = [];
+    let cursor = 0;
+    shardSizes.forEach((shardSize) => {
+      buckets.push(assignedUsers.slice(cursor, cursor + shardSize));
+      cursor += shardSize;
     });
-    return buckets.map((bucket, index) =>
-      bucket.length > 0 ? bucket : assignedUsers.length > 0 ? [assignedUsers[index % assignedUsers.length]!] : []
-    );
+    return buckets;
   }
 
   private toRunEvent(event: WorkerAssignment['recentEvents'][number]): RunEvent {

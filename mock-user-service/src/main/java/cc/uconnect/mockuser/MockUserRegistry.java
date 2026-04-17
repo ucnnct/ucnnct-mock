@@ -25,6 +25,11 @@ public class MockUserRegistry {
     this.initialUserCount = environment.getProperty("mock.users.initial-count", Integer.class, 64);
     this.expansionBuffer = environment.getProperty("mock.users.expansion-buffer", Integer.class, 24);
     this.defaultPasswordHint = environment.getProperty("staging.identity.default-password");
+    if (!provisioner.isEnabled()) {
+      throw new IllegalStateException(
+          "mock-user-service now requires staging-backed identities. Set STAGING_IDENTITY_PROVISION_ENABLED=true."
+      );
+    }
     seedUsers();
     seedFixtures();
   }
@@ -161,28 +166,14 @@ public class MockUserRegistry {
     }
 
     int startIndex = users.size() + 1;
-    if (provisioner.isEnabled()) {
-      List<ProvisionedMockUser> provisionedUsers = provisioner.provisionRange(startIndex, desiredTotal);
-      for (ProvisionedMockUser user : provisionedUsers) {
-        users.putIfAbsent(user.id(), new MockUserEntity(
-            user.id(),
-            user.username(),
-            user.displayName(),
-            user.email(),
-            user.password()
-        ));
-      }
-      return;
-    }
-
-    for (int index = startIndex; index <= desiredTotal; index += 1) {
-      String syntheticId = "synthetic-" + String.format("%04d", index);
-      users.putIfAbsent(syntheticId, new MockUserEntity(
-          syntheticId,
-          buildSyntheticUsername(index),
-          "Synthetic Mock User " + index,
-          buildSyntheticUsername(index) + "@mock.uconnect.cc",
-          null
+    List<ProvisionedMockUser> provisionedUsers = provisioner.provisionRange(startIndex, desiredTotal);
+    for (ProvisionedMockUser user : provisionedUsers) {
+      users.putIfAbsent(user.id(), new MockUserEntity(
+          user.id(),
+          user.username(),
+          user.displayName(),
+          user.email(),
+          user.password()
       ));
     }
   }
@@ -234,11 +225,6 @@ public class MockUserRegistry {
   private int leasedUserCount() {
     return (int) users.values().stream().filter(MockUserEntity::isLeased).count();
   }
-
-  private String buildSyntheticUsername(int index) {
-    return "synthetic.mock.user." + String.format("%03d", index);
-  }
-
   private LeaseSnapshot toLeaseSnapshot(LeaseEntity lease) {
     return new LeaseSnapshot(
         lease.id,

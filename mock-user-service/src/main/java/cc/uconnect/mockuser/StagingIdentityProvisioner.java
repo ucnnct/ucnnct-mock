@@ -47,10 +47,10 @@ public class StagingIdentityProvisioner {
     }
 
     String defaultPassword = required("staging.identity.default-password");
+    String adminToken = fetchAdminToken();
     List<ProvisionedMockUser> provisionedUsers = new ArrayList<>();
 
     for (int index = fromIndex; index <= toIndex; index += 1) {
-      String adminToken = fetchAdminToken();
       String username = buildUsername(index);
       String email = username + "@mock.uconnect.cc";
       String displayName = buildDisplayName(index);

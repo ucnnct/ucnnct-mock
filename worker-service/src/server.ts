@@ -51,6 +51,17 @@ const assignmentSchema = z
         message: 'thinkTimeMaxMs must be greater than or equal to thinkTimeMinMs'
       });
     }
+
+    if (assignment.targetBaseUrl) {
+      if (!assignment.assignedUsers || assignment.assignedUsers.length !== assignment.virtualUsers) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['assignedUsers'],
+          message:
+            'Live staging assignments require exactly one leased identity per virtual user.'
+        });
+      }
+    }
   });
 
 app.use(

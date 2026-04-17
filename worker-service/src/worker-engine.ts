@@ -366,6 +366,11 @@ export class WorkerEngine {
   private buildUsers(input: WorkerAssignmentInput, createdAtMs: number): VirtualUserState[] {
     const rampUpMs = input.rampUpSeconds * 1_000;
     const identities = input.assignedUsers ?? [];
+    if (input.targetBaseUrl && identities.length !== input.virtualUsers) {
+      throw new Error(
+        `Live assignment ${input.assignmentLabel} requires ${input.virtualUsers} dedicated identities, received ${identities.length}.`
+      );
+    }
     // When gradual online is disabled, every virtual user becomes active immediately.
     const instantOnlineStart = input.initialOnlineRatio >= 0.999;
 
@@ -387,7 +392,7 @@ export class WorkerEngine {
 
       return {
         id: `vu-${String(index + 1).padStart(4, '0')}`,
-        identity: identities.length > 0 ? identities[index % identities.length] ?? null : null,
+        identity: identities.length > 0 ? identities[index] ?? null : null,
         authenticated: false,
         connectedToWs: false,
         currentPage: 'HOME',
