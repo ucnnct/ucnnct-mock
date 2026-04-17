@@ -33,7 +33,7 @@ public class MockUserRegistry {
   private final Map<String, MockUserEntity> users = new LinkedHashMap<>();
   private final Map<String, LeaseEntity> leases = new LinkedHashMap<>();
   private final List<FixtureProfile> fixtures = new ArrayList<>();
-  private final ReentrantLock provisioningLock = new ReentrantLock();
+  private final ReentrantLock provisioningLock = new ReentrantLock(true);
   private final ExecutorService warmupExecutor;
   private final AtomicBoolean warmupInProgress = new AtomicBoolean(false);
   private volatile String lastWarmupError;
@@ -313,6 +313,7 @@ public class MockUserRegistry {
           synchronizeUsers(nextTarget);
           lastWarmupError = null;
           backoffMs = 2_000L;
+          sleep(250L);
         } catch (RuntimeException exception) {
           lastWarmupError = exception.getMessage();
           log.warn("Mock identity warmup failed while targeting {} users", nextTarget, exception);
