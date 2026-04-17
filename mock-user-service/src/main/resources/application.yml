@@ -18,6 +18,7 @@ staging:
     target-base-url: ${STAGING_IDENTITY_TARGET_BASE_URL:https://staging.uconnect.cc}
     username-prefix: ${STAGING_IDENTITY_USERNAME_PREFIX:mock.staging}
     default-password: ${STAGING_IDENTITY_DEFAULT_PASSWORD:}
+    verify-created-users: ${STAGING_IDENTITY_VERIFY_CREATED_USERS:false}
 
 mock:
   users:

@@ -53,6 +53,7 @@ public class StagingIdentityProvisioner {
     }
 
     String defaultPassword = required("staging.identity.default-password");
+    boolean verifyCreatedUsers = environment.getProperty("staging.identity.verify-created-users", Boolean.class, false);
     int concurrency = environment.getProperty("mock.users.provision-concurrency", Integer.class, 16);
     int batchSize = environment.getProperty("mock.users.provision-batch-size", Integer.class, 40);
     List<ProvisionedMockUser> provisionedUsers = new ArrayList<>(toIndex - fromIndex + 1);
@@ -62,7 +63,7 @@ public class StagingIdentityProvisioner {
     for (int batchStart = fromIndex; batchStart <= toIndex; batchStart += batchSize) {
       int currentBatchStart = batchStart;
       int batchEnd = Math.min(toIndex, batchStart + batchSize - 1);
-      futures.add(executor.submit(() -> provisionBatch(currentBatchStart, batchEnd, defaultPassword)));
+      futures.add(executor.submit(() -> provisionBatch(currentBatchStart, batchEnd, defaultPassword, verifyCreatedUsers)));
     }
 
     try {
@@ -83,7 +84,12 @@ public class StagingIdentityProvisioner {
     return provisionedUsers;
   }
 
-  private List<ProvisionedMockUser> provisionBatch(int fromIndex, int toIndex, String defaultPassword) {
+  private List<ProvisionedMockUser> provisionBatch(
+      int fromIndex,
+      int toIndex,
+      String defaultPassword,
+      boolean verifyCreatedUsers
+  ) {
     AdminSession adminSession = fetchAdminSession();
     List<ProvisionedMockUser> batch = new ArrayList<>(toIndex - fromIndex + 1);
 
@@ -94,7 +100,7 @@ public class StagingIdentityProvisioner {
 
       EnsureUserResult user = ensureUser(adminSession, username, email, displayName);
       ensurePassword(adminSession, user.userId(), defaultPassword);
-      if (user.created()) {
+      if (user.created() && verifyCreatedUsers) {
         String accessToken = fetchUserToken(username, defaultPassword);
         waitForBusinessProfile(accessToken, user.userId());
       }
