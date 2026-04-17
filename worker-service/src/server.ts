@@ -17,6 +17,7 @@ const assignmentSchema = z
     rampUpSeconds: z.number().int().min(0).max(3_600),
     thinkTimeMinMs: z.number().int().min(0).max(60_000),
     thinkTimeMaxMs: z.number().int().min(0).max(60_000),
+    gradualOnline: z.boolean(),
     initialOnlineRatio: z.number().min(0).max(1),
     avgSessionDurationSeconds: z.number().int().min(30).max(7_200),
     weights: z.object({

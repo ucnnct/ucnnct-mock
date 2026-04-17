@@ -16,6 +16,7 @@ const runDraftSchema = z.object({
   rampUpSeconds: z.number().int().min(0).max(3600),
   thinkTimeMinMs: z.number().int().min(0).max(60000),
   thinkTimeMaxMs: z.number().int().min(0).max(60000),
+  gradualOnline: z.boolean(),
   initialOnlineRatio: z.number().min(0).max(1),
   avgSessionDurationSeconds: z.number().int().min(30).max(7200),
   weights: z.object({

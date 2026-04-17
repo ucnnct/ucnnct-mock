@@ -62,6 +62,7 @@ export class RunsPageComponent {
       rampUpSeconds: value.rampUpSeconds,
       thinkTimeMinMs: value.thinkTimeMinMs,
       thinkTimeMaxMs: value.thinkTimeMaxMs,
+      gradualOnline: value.gradualOnline,
       initialOnlineRatio: value.gradualOnline ? value.initialOnlineRatio : 1,
       avgSessionDurationSeconds: value.avgSessionDurationSeconds,
       weights: value.weights,

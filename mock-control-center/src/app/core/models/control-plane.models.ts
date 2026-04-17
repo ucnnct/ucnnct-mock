@@ -35,6 +35,7 @@ export interface RunDraftInput {
   rampUpSeconds: number;
   thinkTimeMinMs: number;
   thinkTimeMaxMs: number;
+  gradualOnline: boolean;
   initialOnlineRatio: number;
   avgSessionDurationSeconds: number;
   weights: BehaviorWeights;

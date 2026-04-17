@@ -371,8 +371,8 @@ export class WorkerEngine {
         `Live assignment ${input.assignmentLabel} requires ${input.virtualUsers} dedicated identities, received ${identities.length}.`
       );
     }
-    // When gradual online is disabled, every virtual user becomes active immediately.
-    const instantOnlineStart = input.initialOnlineRatio >= 0.999;
+    // Without gradual online, every virtual user should stay online for the whole run.
+    const instantOnlineStart = !input.gradualOnline;
 
     return Array.from({ length: input.virtualUsers }, (_value, index) => {
       const activationOffsetMs =
@@ -426,7 +426,7 @@ export class WorkerEngine {
       return 'login';
     }
 
-    if (user.sessionDeadlineAtMs !== null && now >= user.sessionDeadlineAtMs) {
+    if (assignment.gradualOnline && user.sessionDeadlineAtMs !== null && now >= user.sessionDeadlineAtMs) {
       return 'logout';
     }
 
@@ -514,10 +514,12 @@ export class WorkerEngine {
         (user.currentPage === 'NOTIFICATIONS' ? 1.5 : 1)
     );
 
-    const sessionDurationMs = user.sessionStartedAtMs === null ? 0 : now - user.sessionStartedAtMs;
-    const sessionWeight = assignment.avgSessionDurationSeconds * 1_000;
-    if (sessionDurationMs > sessionWeight * 0.72) {
-      addChoice('logout', 8 + sessionDurationMs / Math.max(sessionWeight, 1));
+    if (assignment.gradualOnline) {
+      const sessionDurationMs = user.sessionStartedAtMs === null ? 0 : now - user.sessionStartedAtMs;
+      const sessionWeight = assignment.avgSessionDurationSeconds * 1_000;
+      if (sessionDurationMs > sessionWeight * 0.72) {
+        addChoice('logout', 8 + sessionDurationMs / Math.max(sessionWeight, 1));
+      }
     }
 
     if (candidates.length === 0) {
@@ -568,7 +570,9 @@ export class WorkerEngine {
         user.currentGroupId = null;
         user.sessionObjective = this.pickObjective(assignment);
         user.sessionStartedAtMs = now;
-        user.sessionDeadlineAtMs = now + this.sampleSessionDurationMs(assignment);
+        user.sessionDeadlineAtMs = assignment.gradualOnline
+          ? now + this.sampleSessionDurationMs(assignment)
+          : null;
         user.sessionRuns += 1;
         this.scheduleLiveTraffic(assignment, user, action);
         return {
@@ -1098,6 +1102,7 @@ export class WorkerEngine {
         rampUpSeconds: 140,
         thinkTimeMinMs: 900,
         thinkTimeMaxMs: 4_200,
+        gradualOnline: true,
         initialOnlineRatio: 0.78,
         avgSessionDurationSeconds: 420,
         weights: {
@@ -1132,6 +1137,7 @@ export class WorkerEngine {
           rampUpSeconds: 90,
           thinkTimeMinMs: 1_100,
           thinkTimeMaxMs: 3_400,
+          gradualOnline: true,
           initialOnlineRatio: 0.72,
           avgSessionDurationSeconds: 280,
           weights: {

@@ -35,6 +35,7 @@ type WorkerAssignment = {
   rampUpSeconds: number;
   thinkTimeMinMs: number;
   thinkTimeMaxMs: number;
+  gradualOnline: boolean;
   initialOnlineRatio: number;
   avgSessionDurationSeconds: number;
   weights: BehaviorWeights;
@@ -802,6 +803,7 @@ export class ControlPlaneService {
                 rampUpSeconds: plan.input.rampUpSeconds,
                 thinkTimeMinMs: plan.input.thinkTimeMinMs,
                 thinkTimeMaxMs: plan.input.thinkTimeMaxMs,
+                gradualOnline: plan.input.gradualOnline,
                 initialOnlineRatio: plan.input.initialOnlineRatio,
                 avgSessionDurationSeconds: plan.input.avgSessionDurationSeconds,
                 weights: plan.input.weights,
@@ -1111,6 +1113,7 @@ export class ControlPlaneService {
       rampUpSeconds: assignment.rampUpSeconds,
       thinkTimeMinMs: assignment.thinkTimeMinMs,
       thinkTimeMaxMs: assignment.thinkTimeMaxMs,
+      gradualOnline: assignment.gradualOnline,
       initialOnlineRatio: assignment.initialOnlineRatio,
       avgSessionDurationSeconds: assignment.avgSessionDurationSeconds,
       weights: assignment.weights,
