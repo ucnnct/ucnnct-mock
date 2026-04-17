@@ -22,6 +22,8 @@ staging:
 mock:
   users:
     initial-count: ${MOCK_USERS_INITIAL_COUNT:64}
+    target-count: ${MOCK_USERS_TARGET_COUNT:${MOCK_USERS_INITIAL_COUNT:64}}
     expansion-buffer: ${MOCK_USERS_EXPANSION_BUFFER:24}
     provision-concurrency: ${MOCK_USERS_PROVISION_CONCURRENCY:16}
     provision-batch-size: ${MOCK_USERS_PROVISION_BATCH_SIZE:40}
+    warmup-step: ${MOCK_USERS_WARMUP_STEP:500}

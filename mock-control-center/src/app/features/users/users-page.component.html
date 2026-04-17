@@ -17,6 +17,10 @@
       <div class="metric-value">{{ userRuntime()?.totalUsers ?? 0 }}</div>
     </article>
     <article class="metric-card">
+      <span class="metric-label">Target stock</span>
+      <div class="metric-value">{{ userRuntime()?.targetUsers ?? 0 }}</div>
+    </article>
+    <article class="metric-card">
       <span class="metric-label">Available</span>
       <div class="metric-value">{{ userRuntime()?.availableUsers ?? 0 }}</div>
     </article>
@@ -45,6 +49,10 @@
           <span>total staging-backed mock identities currently known by the registry</span>
         </div>
         <div class="capacity-row">
+          <strong>{{ runtime.targetUsers }}</strong>
+          <span>target stock maintained so large runs do not depend on cold provisioning</span>
+        </div>
+        <div class="capacity-row">
           <strong>{{ runtime.availableUsers }}</strong>
           <span>immediately leasable staging identities for the next run</span>
         </div>
@@ -55,6 +63,23 @@
         <div class="capacity-row">
           <strong>{{ runtime.activeLeases }}</strong>
           <span>active reservations managed by the orchestrator</span>
+        </div>
+        <div class="capacity-row">
+          <strong>{{ runtime.warmupInProgress ? 'warming' : 'ready' }}</strong>
+          <span>background prewarm status for the identity stock</span>
+        </div>
+
+        <div class="credentials-callout credentials-callout--compact" *ngIf="runtime.warmupInProgress">
+          <strong>Warmup en cours</strong>
+          <span>
+            Le service augmente le stock jusqu'Ã  <code>{{ runtime.targetUsers }}</code> identitÃ©s
+            staging. Les gros runs partent normalement une fois ce stock prÃ©chauffÃ©.
+          </span>
+        </div>
+
+        <div class="credentials-callout credentials-callout--compact" *ngIf="runtime.lastWarmupError">
+          <strong>Dernier incident de warmup</strong>
+          <span>{{ runtime.lastWarmupError }}</span>
         </div>
       </div>
 

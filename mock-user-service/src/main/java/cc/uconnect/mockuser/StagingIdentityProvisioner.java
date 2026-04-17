@@ -112,6 +112,15 @@ public class StagingIdentityProvisioner {
   }
 
   private AdminSession fetchAdminSession() {
+    return retry(
+        "fetch admin session",
+        8,
+        1_500L,
+        this::fetchAdminSessionOnce
+    );
+  }
+
+  private AdminSession fetchAdminSessionOnce() {
     String body = formEncode(
         "grant_type", "password",
         "client_id", required("staging.identity.admin-client-id"),
@@ -204,6 +213,15 @@ public class StagingIdentityProvisioner {
   }
 
   private String fetchUserToken(String username, String password) {
+    return retry(
+        "fetch user token " + username,
+        6,
+        1_000L,
+        () -> fetchUserTokenOnce(username, password)
+    );
+  }
+
+  private String fetchUserTokenOnce(String username, String password) {
     String body = formEncode(
         "grant_type", "password",
         "client_id", required("staging.identity.client-id"),
@@ -388,26 +406,30 @@ public class StagingIdentityProvisioner {
   }
 
   private <T> T withAdminRetry(AdminSession initialSession, Callable<T> operation) {
-    ensureFreshSession(initialSession);
-    try {
-      return operation.call();
-    } catch (UnexpectedHttpStatusException exception) {
-      if (exception.statusCode() != 401) {
-        throw exception;
-      }
-      AdminSession session = fetchAdminSession();
+    long backoffMs = 1_000L;
+    for (int attempt = 1; attempt <= 6; attempt += 1) {
+      ensureFreshSession(initialSession);
       try {
+        return operation.call();
+      } catch (UnexpectedHttpStatusException exception) {
+        if (!isRetryableAdminStatus(exception.statusCode()) || attempt == 6) {
+          throw exception;
+        }
+
+        AdminSession session = fetchAdminSession();
         initialSession.token = session.token;
         initialSession.expiresAtMs = session.expiresAtMs;
-        return operation.call();
-      } catch (UnexpectedHttpStatusException retryException) {
-        throw retryException;
-      } catch (Exception retryException) {
-        throw new IllegalStateException("Admin operation failed after token refresh.", retryException);
+        sleep(backoffMs, "admin retry backoff");
+        backoffMs = Math.min(backoffMs * 2L, 10_000L);
+      } catch (Exception exception) {
+        if (attempt == 6) {
+          throw new IllegalStateException("Admin operation failed.", exception);
+        }
+        sleep(backoffMs, "admin retry backoff");
+        backoffMs = Math.min(backoffMs * 2L, 10_000L);
       }
-    } catch (Exception exception) {
-      throw new IllegalStateException("Admin operation failed.", exception);
     }
+    throw new IllegalStateException("Admin operation failed after retries.");
   }
 
   private IllegalStateException unwrapProvisioningFailure(ExecutionException exception) {
@@ -416,6 +438,58 @@ public class StagingIdentityProvisioner {
       return illegalStateException;
     }
     return new IllegalStateException("Provisioning failed.", cause);
+  }
+
+  private <T> T retry(String context, int maxAttempts, long initialDelayMs, Callable<T> operation) {
+    long backoffMs = initialDelayMs;
+    for (int attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        return operation.call();
+      } catch (UnexpectedHttpStatusException exception) {
+        if (!isRetryableStatus(exception.statusCode()) || attempt == maxAttempts) {
+          throw exception;
+        }
+        log.warn(
+            "Retrying {} after transient status {} (attempt {}/{})",
+            context,
+            exception.statusCode(),
+            attempt,
+            maxAttempts
+        );
+      } catch (Exception exception) {
+        if (attempt == maxAttempts) {
+          throw new IllegalStateException("Operation failed for " + context, exception);
+        }
+        log.warn(
+            "Retrying {} after transient failure (attempt {}/{})",
+            context,
+            attempt,
+            maxAttempts,
+            exception
+        );
+      }
+
+      sleep(backoffMs, context + " retry backoff");
+      backoffMs = Math.min(backoffMs * 2L, 15_000L);
+    }
+    throw new IllegalStateException("Operation failed for " + context);
+  }
+
+  private boolean isRetryableStatus(int statusCode) {
+    return statusCode == 429 || (statusCode >= 500 && statusCode <= 504);
+  }
+
+  private boolean isRetryableAdminStatus(int statusCode) {
+    return statusCode == 401 || isRetryableStatus(statusCode);
+  }
+
+  private void sleep(long durationMs, String context) {
+    try {
+      Thread.sleep(durationMs);
+    } catch (InterruptedException exception) {
+      Thread.currentThread().interrupt();
+      throw new IllegalStateException("Interrupted during " + context, exception);
+    }
   }
 }
 

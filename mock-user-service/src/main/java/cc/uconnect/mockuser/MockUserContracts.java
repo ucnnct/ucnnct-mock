@@ -66,9 +66,12 @@ record MockUserRuntime(
     String service,
     String environment,
     int totalUsers,
+    int targetUsers,
     int availableUsers,
     int leasedUsers,
     int activeLeases,
+    boolean warmupInProgress,
+    String lastWarmupError,
     String defaultPasswordHint,
     String generatedAt
 ) {

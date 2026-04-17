@@ -75,8 +75,10 @@ services:
       STAGING_IDENTITY_TARGET_BASE_URL: "https://staging.uconnect.cc"
       STAGING_IDENTITY_USERNAME_PREFIX: "mock.staging"
       STAGING_IDENTITY_DEFAULT_PASSWORD: "MockPass123!"
+      MOCK_USERS_TARGET_COUNT: "10000"
       MOCK_USERS_PROVISION_CONCURRENCY: "16"
       MOCK_USERS_PROVISION_BATCH_SIZE: "40"
+      MOCK_USERS_WARMUP_STEP: "500"
     ports:
       - "7500:7500"
     volumes:

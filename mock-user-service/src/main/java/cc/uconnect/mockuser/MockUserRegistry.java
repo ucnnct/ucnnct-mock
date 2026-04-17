@@ -1,5 +1,6 @@
 package cc.uconnect.mockuser;
 
+import jakarta.annotation.PreDestroy;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -7,24 +8,47 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.concurrent.atomic.AtomicBoolean;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.core.env.Environment;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
 @Service
 public class MockUserRegistry {
+  private static final Logger log = LoggerFactory.getLogger(MockUserRegistry.class);
+
   private final StagingIdentityProvisioner provisioner;
   private final int initialUserCount;
+  private final int targetUserCount;
   private final int expansionBuffer;
+  private final int warmupStep;
   private final String defaultPasswordHint;
   private final Map<String, MockUserEntity> users = new LinkedHashMap<>();
   private final Map<String, LeaseEntity> leases = new LinkedHashMap<>();
   private final List<FixtureProfile> fixtures = new ArrayList<>();
+  private final ReentrantLock provisioningLock = new ReentrantLock();
+  private final ExecutorService warmupExecutor;
+  private final AtomicBoolean warmupInProgress = new AtomicBoolean(false);
+  private volatile String lastWarmupError;
 
   public MockUserRegistry(StagingIdentityProvisioner provisioner, Environment environment) {
     this.provisioner = provisioner;
     this.initialUserCount = environment.getProperty("mock.users.initial-count", Integer.class, 64);
+    this.targetUserCount = Math.max(
+        initialUserCount,
+        environment.getProperty("mock.users.target-count", Integer.class, initialUserCount)
+    );
     this.expansionBuffer = environment.getProperty("mock.users.expansion-buffer", Integer.class, 24);
+    this.warmupStep = environment.getProperty("mock.users.warmup-step", Integer.class, 500);
     this.defaultPasswordHint = environment.getProperty("staging.identity.default-password");
+    this.warmupExecutor = Executors.newSingleThreadExecutor(new WarmupThreadFactory());
     if (!provisioner.isEnabled()) {
       throw new IllegalStateException(
           "mock-user-service now requires staging-backed identities. Set STAGING_IDENTITY_PROVISION_ENABLED=true."
@@ -43,9 +67,12 @@ public class MockUserRegistry {
         "mock-user-service",
         "staging",
         totalUsers,
+        targetUserCount,
         totalUsers - leasedUsers,
         leasedUsers,
         activeLeases,
+        warmupInProgress.get(),
+        lastWarmupError,
         defaultPasswordHint,
         Instant.now().toString()
     );
@@ -78,43 +105,43 @@ public class MockUserRegistry {
     );
   }
 
-  public synchronized LeaseResponse createLease(LeaseRequest request) {
+  public LeaseResponse createLease(LeaseRequest request) {
     if (!"staging".equals(request.environment())) {
       throw new IllegalArgumentException("Only staging is supported by mock-user-service.");
     }
 
-    leases.values().stream()
-        .filter((lease) -> lease.runId.equals(request.runId()) && lease.isActive())
-        .findFirst()
-        .ifPresent((lease) -> {
-          throw new IllegalStateException("An active lease already exists for run " + request.runId() + ".");
-        });
+    assertNoActiveLeaseForRun(request.runId());
 
     ensureAvailableUsers(request.requestedUsers());
-    List<MockUserEntity> assignedUsers = availableUsers(request.requestedUsers());
-    if (assignedUsers.size() < request.requestedUsers()) {
-      throw new IllegalStateException("Not enough staging-backed mock users are available to satisfy the lease request.");
+
+    synchronized (this) {
+      assertNoActiveLeaseForRun(request.runId());
+      List<MockUserEntity> assignedUsers = availableUsers(request.requestedUsers());
+      if (assignedUsers.size() < request.requestedUsers()) {
+        throw new IllegalStateException("Not enough staging-backed mock users are available to satisfy the lease request.");
+      }
+
+      String leaseId = "lease-" + java.util.UUID.randomUUID().toString().substring(0, 8);
+      Instant issuedAt = Instant.now();
+      assignedUsers.forEach((user) -> user.leaseId = leaseId);
+
+      LeaseEntity lease = new LeaseEntity(
+          leaseId,
+          request.runId(),
+          request.runName(),
+          request.requestedUsers(),
+          assignedUsers.stream().map((user) -> user.id).toList(),
+          issuedAt,
+          "active"
+      );
+      leases.put(leaseId, lease);
+      triggerBackgroundWarmup();
+
+      return new LeaseResponse(
+          toLeaseSnapshot(lease),
+          assignedUsers.stream().map(this::toLeasedUser).toList()
+      );
     }
-
-    String leaseId = "lease-" + java.util.UUID.randomUUID().toString().substring(0, 8);
-    Instant issuedAt = Instant.now();
-    assignedUsers.forEach((user) -> user.leaseId = leaseId);
-
-    LeaseEntity lease = new LeaseEntity(
-        leaseId,
-        request.runId(),
-        request.runName(),
-        request.requestedUsers(),
-        assignedUsers.stream().map((user) -> user.id).toList(),
-        issuedAt,
-        "active"
-    );
-    leases.put(leaseId, lease);
-
-    return new LeaseResponse(
-        toLeaseSnapshot(lease),
-        assignedUsers.stream().map(this::toLeasedUser).toList()
-    );
   }
 
   public synchronized LeaseSnapshot releaseLease(String leaseId) {
@@ -150,31 +177,47 @@ public class MockUserRegistry {
   }
 
   private void ensureAvailableUsers(int requestedUsers) {
-    int availableUsers = availableUserCount();
-    if (availableUsers >= requestedUsers) {
-      return;
+    int desiredTotal;
+    synchronized (this) {
+      int availableUsers = availableUserCount();
+      if (availableUsers >= requestedUsers) {
+        return;
+      }
+
+      int missingUsers = requestedUsers - availableUsers;
+      desiredTotal = Math.max(users.size() + missingUsers, leasedUserCount() + requestedUsers + expansionBuffer);
     }
 
-    int missingUsers = requestedUsers - availableUsers;
-    int desiredTotal = Math.max(users.size() + missingUsers, leasedUserCount() + requestedUsers + expansionBuffer);
     synchronizeUsers(desiredTotal);
   }
 
   private void synchronizeUsers(int desiredTotal) {
-    if (desiredTotal <= users.size()) {
+    if (desiredTotal <= currentUserCount()) {
       return;
     }
 
-    int startIndex = users.size() + 1;
-    List<ProvisionedMockUser> provisionedUsers = provisioner.provisionRange(startIndex, desiredTotal);
-    for (ProvisionedMockUser user : provisionedUsers) {
-      users.putIfAbsent(user.id(), new MockUserEntity(
-          user.id(),
-          user.username(),
-          user.displayName(),
-          user.email(),
-          user.password()
-      ));
+    provisioningLock.lock();
+    try {
+      int currentCount = currentUserCount();
+      if (desiredTotal <= currentCount) {
+        return;
+      }
+
+      int startIndex = currentCount + 1;
+      List<ProvisionedMockUser> provisionedUsers = provisioner.provisionRange(startIndex, desiredTotal);
+      synchronized (this) {
+        for (ProvisionedMockUser user : provisionedUsers) {
+          users.putIfAbsent(user.id(), new MockUserEntity(
+              user.id(),
+              user.username(),
+              user.displayName(),
+              user.email(),
+              user.password()
+          ));
+        }
+      }
+    } finally {
+      provisioningLock.unlock();
     }
   }
 
@@ -225,6 +268,84 @@ public class MockUserRegistry {
   private int leasedUserCount() {
     return (int) users.values().stream().filter(MockUserEntity::isLeased).count();
   }
+
+  private synchronized int currentUserCount() {
+    return users.size();
+  }
+
+  @EventListener(ApplicationReadyEvent.class)
+  public void onApplicationReady() {
+    triggerBackgroundWarmup();
+  }
+
+  @PreDestroy
+  public void shutdownWarmupExecutor() {
+    warmupExecutor.shutdownNow();
+  }
+
+  private void triggerBackgroundWarmup() {
+    if (targetUserCount <= currentUserCount()) {
+      lastWarmupError = null;
+      return;
+    }
+
+    if (!warmupInProgress.compareAndSet(false, true)) {
+      return;
+    }
+
+    warmupExecutor.submit(this::warmToTargetCapacity);
+  }
+
+  private void warmToTargetCapacity() {
+    long backoffMs = 2_000L;
+
+    try {
+      while (!Thread.currentThread().isInterrupted()) {
+        int currentCount = currentUserCount();
+        if (currentCount >= targetUserCount) {
+          lastWarmupError = null;
+          return;
+        }
+
+        int nextTarget = Math.min(targetUserCount, currentCount + Math.max(1, warmupStep));
+        try {
+          log.info("Warming mock identity stock from {} to {}", currentCount, nextTarget);
+          synchronizeUsers(nextTarget);
+          lastWarmupError = null;
+          backoffMs = 2_000L;
+        } catch (RuntimeException exception) {
+          lastWarmupError = exception.getMessage();
+          log.warn("Mock identity warmup failed while targeting {} users", nextTarget, exception);
+          sleep(backoffMs);
+          backoffMs = Math.min(backoffMs * 2L, 30_000L);
+        }
+      }
+    } finally {
+      warmupInProgress.set(false);
+      if (currentUserCount() < targetUserCount && !Thread.currentThread().isInterrupted()) {
+        triggerBackgroundWarmup();
+      }
+    }
+  }
+
+  private synchronized void assertNoActiveLeaseForRun(String runId) {
+    leases.values().stream()
+        .filter((lease) -> lease.runId.equals(runId) && lease.isActive())
+        .findFirst()
+        .ifPresent((lease) -> {
+          throw new IllegalStateException("An active lease already exists for run " + runId + ".");
+        });
+  }
+
+  private void sleep(long durationMs) {
+    try {
+      Thread.sleep(durationMs);
+    } catch (InterruptedException exception) {
+      Thread.currentThread().interrupt();
+      throw new IllegalStateException("Interrupted while warming mock identity stock.", exception);
+    }
+  }
+
   private LeaseSnapshot toLeaseSnapshot(LeaseEntity lease) {
     return new LeaseSnapshot(
         lease.id,
@@ -306,6 +427,15 @@ public class MockUserRegistry {
 
     private Instant issuedAt() {
       return issuedAt;
+    }
+  }
+
+  private static final class WarmupThreadFactory implements ThreadFactory {
+    @Override
+    public Thread newThread(Runnable runnable) {
+      Thread thread = new Thread(runnable, "mock-user-warmup");
+      thread.setDaemon(true);
+      return thread;
     }
   }
 }

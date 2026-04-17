@@ -117,9 +117,12 @@ export interface MockUserRuntime {
   service: string;
   environment: EnvironmentName;
   totalUsers: number;
+  targetUsers: number;
   availableUsers: number;
   leasedUsers: number;
   activeLeases: number;
+  warmupInProgress: boolean;
+  lastWarmupError: string | null;
   defaultPasswordHint: string | null;
   generatedAt: string;
 }
