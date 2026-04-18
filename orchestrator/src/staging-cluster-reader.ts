@@ -138,6 +138,10 @@ type PodList = {
             cpu?: string;
             memory?: string;
           };
+          limits?: {
+            cpu?: string;
+            memory?: string;
+          };
         };
       }>;
     };
@@ -178,6 +182,7 @@ type ServicePodSnapshot = {
   cpuRequestsMillicores: number;
   cpuUsageMillicores: number;
   memoryRequestsMi: number;
+  memoryLimitsMi: number;
   memoryUsageMi: number;
 };
 
@@ -242,6 +247,7 @@ export class StagingClusterReader {
         cpuRequestsMillicores: 0,
         cpuUsageMillicores: 0,
         memoryRequestsMi: 0,
+        memoryLimitsMi: 0,
         memoryUsageMi: 0
       };
 
@@ -253,6 +259,7 @@ export class StagingClusterReader {
       for (const container of pod.spec?.containers ?? []) {
         current.cpuRequestsMillicores += this.parseCpuToMillicores(container.resources?.requests?.cpu);
         current.memoryRequestsMi += this.parseMemoryToMi(container.resources?.requests?.memory);
+        current.memoryLimitsMi += this.parseMemoryToMi(container.resources?.limits?.memory);
       }
 
       const podMetric = podMetricsByName.get(pod.metadata?.name ?? '');
@@ -280,6 +287,7 @@ export class StagingClusterReader {
         cpuRequestsMillicores: 0,
         cpuUsageMillicores: 0,
         memoryRequestsMi: 0,
+        memoryLimitsMi: 0,
         memoryUsageMi: 0
       };
 
@@ -301,7 +309,10 @@ export class StagingClusterReader {
       const cpuPercent =
         hpaCpuPercent ??
         this.percentOrZero(podSnapshot.cpuUsageMillicores, podSnapshot.cpuRequestsMillicores);
-      const memoryPercent = this.percentOrZero(podSnapshot.memoryUsageMi, podSnapshot.memoryRequestsMi);
+      const memoryPercent = this.percentOrZero(
+        podSnapshot.memoryUsageMi,
+        podSnapshot.memoryLimitsMi > 0 ? podSnapshot.memoryLimitsMi : podSnapshot.memoryRequestsMi
+      );
       const latestScaleAt =
         this.findLatestTransitionTime(hpa?.status?.conditions) ??
         this.findLatestTransitionTime(workload?.status?.conditions) ??
@@ -315,8 +326,8 @@ export class StagingClusterReader {
             : 'healthy';
 
       const scopeText = hpa
-        ? `HPA CPU ${cpuPercent}%/${cpuTargetPercent ?? 'n/a'}%, ready ${readyReplicas}/${targetReplicas} pods.`
-        : `No HPA configured, ready ${readyReplicas}/${targetReplicas} pods.`;
+        ? `HPA CPU ${cpuPercent}%/${cpuTargetPercent ?? 'n/a'}%, RAM ${memoryPercent}% of limit, ready ${readyReplicas}/${targetReplicas} pods.`
+        : `No HPA configured, RAM ${memoryPercent}% of limit, ready ${readyReplicas}/${targetReplicas} pods.`;
 
       return {
         id: definition.id,

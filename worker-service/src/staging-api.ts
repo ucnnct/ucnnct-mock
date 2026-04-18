@@ -97,6 +97,11 @@ export class StagingApiDriver {
     );
   }
 
+  hasAuthenticatedSession(sessionKey: string): boolean {
+    const session = this.sessions.get(sessionKey);
+    return Boolean(session?.accessToken) && (session?.expiresAtMs ?? 0) > Date.now();
+  }
+
   forget(sessionKey: string): void {
     this.sessions.delete(sessionKey);
     this.stats.delete(sessionKey);

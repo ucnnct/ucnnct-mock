@@ -4,7 +4,6 @@ type LiveSessionState = {
   cachedShellAssetUrls: string[];
   lastShellAtMs: number;
   lastUserInfoAtMs: number;
-  lastAuthAtMs: number;
   lastStatus: number | null;
   lastActivityAtMs: number | null;
 };
@@ -47,7 +46,6 @@ type LiveTouchOutcome = {
 
 const SHELL_MIN_INTERVAL_MS = 8_000;
 const USERINFO_MIN_INTERVAL_MS = 12_000;
-const AUTH_MIN_INTERVAL_MS = 18_000;
 const MAX_ASSET_FETCHES = 3;
 
 export class LiveTrafficDriver {
@@ -136,10 +134,7 @@ export class LiveTrafficDriver {
       case 'prepare_upload':
       case 'upload_file':
       case 'accept_friend_request':
-        if (now - session.lastAuthAtMs < AUTH_MIN_INTERVAL_MS) {
-          return null;
-        }
-        return () => this.touchAuthGateway(session, input.baseUrl);
+        return null;
       default:
         return null;
     }
@@ -189,38 +184,6 @@ export class LiveTrafficDriver {
     return { requests, failures, lastStatus, lastActivityAtMs };
   }
 
-  private async touchAuthGateway(
-    session: LiveSessionState,
-    baseUrl: string
-  ): Promise<LiveTouchOutcome> {
-    const loginResponse = await this.fetchWithCookies(session, new URL('/bff/login', baseUrl), {
-      redirect: 'manual'
-    });
-    let requests = 1;
-    let failures = loginResponse.status >= 400 ? 1 : 0;
-    let lastStatus = loginResponse.status;
-    const lastActivityAtMs = Date.now();
-    session.lastAuthAtMs = lastActivityAtMs;
-
-    const location = loginResponse.headers.get('location');
-    await this.consumeResponse(loginResponse);
-
-    if (location) {
-      const redirectUrl = new URL(location, baseUrl);
-      const redirectResponse = await this.fetchWithCookies(session, redirectUrl, {
-        redirect: 'manual'
-      });
-      requests += 1;
-      failures += redirectResponse.status >= 400 ? 1 : 0;
-      lastStatus = redirectResponse.status;
-      await this.consumeResponse(redirectResponse);
-    }
-
-    session.lastStatus = lastStatus;
-    session.lastActivityAtMs = lastActivityAtMs;
-    return { requests, failures, lastStatus, lastActivityAtMs };
-  }
-
   private getOrCreateSession(sessionKey: string): LiveSessionState {
     let session = this.sessions.get(sessionKey);
     if (!session) {
@@ -230,7 +193,6 @@ export class LiveTrafficDriver {
         cachedShellAssetUrls: [],
         lastShellAtMs: 0,
         lastUserInfoAtMs: 0,
-        lastAuthAtMs: 0,
         lastStatus: null,
         lastActivityAtMs: null
       };

@@ -277,18 +277,20 @@ export class WorkerEngine {
       return nextUser;
     });
 
+    const synchronizedUsers = this.reconcileLiveState(assignment, users);
+
     let nextAssignment: WorkerAssignmentRuntime = {
       ...assignment,
-      users,
+      users: synchronizedUsers,
       updatedAtMs: now,
       elapsedSeconds: this.round(elapsedMs / 1_000, 1),
       progressPercent: Math.round((elapsedMs / (assignment.durationSeconds * 1_000)) * 100)
     };
 
-    const authenticatedUsers = users.filter((user) => user.authenticated).length;
-    const connectedUsers = users.filter((user) => user.connectedToWs).length;
+    const authenticatedUsers = synchronizedUsers.filter((user) => user.authenticated).length;
+    const connectedUsers = synchronizedUsers.filter((user) => user.connectedToWs).length;
     const activeUsers = authenticatedUsers;
-    const liveAggregate = this.aggregateLiveTraffic(assignment.id, users);
+    const liveAggregate = this.aggregateLiveTraffic(assignment.id, synchronizedUsers);
 
     const stepRequestsPerSecond = tickRequestCost.reduce((sum, value) => sum + value, 0) / (TICK_MS / 1_000);
     const stepMessagesPerSecond = tickMessageCount.reduce((sum, value) => sum + value, 0) / (TICK_MS / 1_000);
@@ -321,7 +323,7 @@ export class WorkerEngine {
       liveFailures: liveAggregate.failures,
       liveLastStatus: liveAggregate.lastStatus,
       liveLastAtMs: liveAggregate.lastActivityAtMs,
-      objectiveMix: this.buildObjectiveMix(users)
+      objectiveMix: this.buildObjectiveMix(synchronizedUsers)
     };
 
     if (elapsedMs >= assignment.durationSeconds * 1_000) {
@@ -333,6 +335,30 @@ export class WorkerEngine {
     }
 
     return nextAssignment;
+  }
+
+  private reconcileLiveState(
+    assignment: Pick<WorkerAssignmentRuntime, 'id' | 'targetBaseUrl'>,
+    users: VirtualUserState[]
+  ): VirtualUserState[] {
+    if (!assignment.targetBaseUrl) {
+      return users;
+    }
+
+    return users.map((user) => {
+      const sessionKey = this.liveSessionKey(assignment.id, user.id);
+      const authenticated = user.authenticated && this.stagingApi.hasAuthenticatedSession(sessionKey);
+      const connectedToWs = authenticated && this.stagingRealtime.isReady(sessionKey);
+      if (authenticated === user.authenticated && connectedToWs === user.connectedToWs) {
+        return user;
+      }
+
+      return {
+        ...user,
+        authenticated,
+        connectedToWs
+      };
+    });
   }
 
   private createAssignmentRuntime(
@@ -572,7 +598,7 @@ export class WorkerEngine {
     switch (action) {
       case 'login': {
         user.authenticated = true;
-        user.connectedToWs = true;
+        user.connectedToWs = false;
         user.currentPage = 'HOME';
         user.currentConversationId = null;
         user.currentGroupId = null;
@@ -584,7 +610,7 @@ export class WorkerEngine {
         user.sessionRuns += 1;
         this.scheduleLiveTraffic(assignment, user, action);
         return {
-          detail: `Logged in, initialized the realtime websocket and opened a ${user.sessionObjective} session${assignment.targetBaseUrl ? ' using live staging traffic.' : '.'}`,
+          detail: `Logged in and requested realtime websocket bootstrap for a ${user.sessionObjective} session${assignment.targetBaseUrl ? ' using live staging traffic.' : '.'}`,
           requestCost,
           messageCount: 0,
           uploadCount: 0,
@@ -1023,30 +1049,10 @@ export class WorkerEngine {
 
     switch (action) {
       case 'send_private_message':
-        if (this.stagingRealtime.isReady(sessionKey)) {
-          this.stagingRealtime.schedule(realtimeInput);
-        } else {
-          this.stagingApi.schedule({
-            sessionKey,
-            baseUrl: assignment.targetBaseUrl,
-            action,
-            identity: user.identity,
-            peerCandidates
-          });
-        }
+        this.stagingRealtime.schedule(realtimeInput);
         break;
       case 'send_group_message':
-        if (this.stagingRealtime.isReady(sessionKey) && !!context.currentGroupId) {
-          this.stagingRealtime.schedule(realtimeInput);
-        } else {
-          this.stagingApi.schedule({
-            sessionKey,
-            baseUrl: assignment.targetBaseUrl,
-            action,
-            identity: user.identity,
-            peerCandidates
-          });
-        }
+        this.stagingRealtime.schedule(realtimeInput);
         break;
       case 'login':
       case 'open_home':
