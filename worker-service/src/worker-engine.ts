@@ -498,6 +498,25 @@ export class WorkerEngine {
       return 'logout';
     }
 
+    if (assignment.targetBaseUrl && !user.connectedToWs) {
+      const warmupChoices: ActionChoice[] = [];
+      const addWarmupChoice = (action: UserAction, weight: number) => {
+        if (weight > 0) {
+          warmupChoices.push({ action, weight });
+        }
+      };
+
+      addWarmupChoice('open_home', Math.max(assignment.weights.browse, 1));
+      addWarmupChoice('fetch_notifications', Math.max(assignment.weights.notificationCheck, 1));
+      addWarmupChoice('fetch_friends', Math.max(assignment.weights.social, 1));
+      addWarmupChoice('open_private_conversation', Math.max(assignment.weights.privateMessage * 0.8, 1));
+      addWarmupChoice('open_group_conversation', Math.max(assignment.weights.group * 0.8, 1));
+
+      if (warmupChoices.length > 0) {
+        return this.pickWeighted(warmupChoices);
+      }
+    }
+
     if (!user.sessionObjective || Math.random() < 0.05) {
       user.sessionObjective = this.pickObjective(assignment);
     }
@@ -1084,7 +1103,7 @@ export class WorkerEngine {
       return 0;
     }
 
-    const spreadMs = Math.min(12_000, Math.max(600, Math.round(input.virtualUsers / 2)));
+    const spreadMs = Math.min(60_000, Math.max(6_000, input.virtualUsers * 300));
     if (spreadMs <= 0) {
       return 0;
     }

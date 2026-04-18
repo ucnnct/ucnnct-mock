@@ -34,11 +34,18 @@ type RealtimeSessionState = {
   currentGroupId: string | null;
   lastStatus: number | null;
   lastActivityAtMs: number | null;
+  reconnectDelayMs: number;
 };
 
 export class StagingRealtimeDriver {
   private readonly sessions = new Map<string, RealtimeSessionState>();
   private readonly stats = new Map<string, LiveTrafficStats>();
+  private readonly maxConcurrentBootstraps = Math.max(
+    1,
+    Number(process.env.WS_BOOTSTRAP_CONCURRENCY ?? 6)
+  );
+  private bootstrapsInFlight = 0;
+  private readonly bootstrapWaiters: Array<() => void> = [];
 
   constructor(private readonly browserSessions: StagingBrowserSessionManager) {}
 
@@ -170,31 +177,34 @@ export class StagingRealtimeDriver {
     identity: AssignedMockUserIdentity,
     session: RealtimeSessionState
   ): Promise<RealtimeOutcome> {
-    let requests = 0;
-    let failures = 0;
-    let lastStatus: number | null = null;
-    let lastActivityAtMs: number | null = null;
+    return this.withBootstrapPermit(async () => {
+      let requests = 0;
+      let failures = 0;
+      let lastStatus: number | null = null;
+      let lastActivityAtMs: number | null = null;
 
-    const auth = await this.browserSessions.ensureAuthenticated(sessionKey, baseUrl, identity);
-    requests += auth.requests;
-    failures += auth.failures;
-    lastStatus = auth.lastStatus;
-    lastActivityAtMs = auth.lastActivityAtMs;
+      const auth = await this.browserSessions.ensureAuthenticated(sessionKey, baseUrl, identity);
+      requests += auth.requests;
+      failures += auth.failures;
+      lastStatus = auth.lastStatus;
+      lastActivityAtMs = auth.lastActivityAtMs;
 
-    const wsStatus = await this.openWebSocket(sessionKey, session, baseUrl);
-    requests += wsStatus.requests;
-    failures += wsStatus.failures;
-    lastStatus = wsStatus.lastStatus ?? lastStatus;
-    lastActivityAtMs = wsStatus.lastActivityAtMs ?? lastActivityAtMs;
+      const wsStatus = await this.openWebSocket(sessionKey, session, baseUrl);
+      requests += wsStatus.requests;
+      failures += wsStatus.failures;
+      lastStatus = wsStatus.lastStatus ?? lastStatus;
+      lastActivityAtMs = wsStatus.lastActivityAtMs ?? lastActivityAtMs;
 
-    session.lastStatus = lastStatus;
-    session.lastActivityAtMs = lastActivityAtMs;
-    if (session.reconnectTimer) {
-      clearTimeout(session.reconnectTimer);
-      session.reconnectTimer = null;
-    }
+      session.lastStatus = lastStatus;
+      session.lastActivityAtMs = lastActivityAtMs;
+      session.reconnectDelayMs = 1_000;
+      if (session.reconnectTimer) {
+        clearTimeout(session.reconnectTimer);
+        session.reconnectTimer = null;
+      }
 
-    return { requests, failures, lastStatus, lastActivityAtMs };
+      return { requests, failures, lastStatus, lastActivityAtMs };
+    });
   }
 
   private async openWebSocket(
@@ -269,6 +279,25 @@ export class StagingRealtimeDriver {
         clearTimeout(timeout);
         session.wsReady = false;
         reject(error);
+      });
+
+      socket.once('unexpected-response', (_request, response) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timeout);
+        session.wsReady = false;
+        const status = response.statusCode ?? 503;
+        let body = '';
+        response.on('data', (chunk) => {
+          body += chunk.toString();
+        });
+        response.on('end', () => {
+          session.lastStatus = status;
+          session.lastActivityAtMs = Date.now();
+          reject(new Error(`WebSocket handshake rejected ${status}: ${body.slice(0, 240)}`));
+        });
       });
 
       socket.once('close', (code, reason) => {
@@ -487,7 +516,8 @@ export class StagingRealtimeDriver {
         currentPeerId: null,
         currentGroupId: null,
         lastStatus: null,
-        lastActivityAtMs: null
+        lastActivityAtMs: null,
+        reconnectDelayMs: 1_000
       };
       this.sessions.set(sessionKey, session);
     }
@@ -503,6 +533,12 @@ export class StagingRealtimeDriver {
       return;
     }
 
+    const nextDelay = Math.min(
+      Math.max(delayMs, session.reconnectDelayMs, 750),
+      15_000
+    );
+    const jitterMs = Math.floor(Math.random() * 400);
+
     session.reconnectTimer = setTimeout(() => {
       const current = this.sessions.get(sessionKey);
       if (!current) {
@@ -510,13 +546,31 @@ export class StagingRealtimeDriver {
       }
 
       current.reconnectTimer = null;
+      current.reconnectDelayMs = Math.min(current.reconnectDelayMs * 2, 15_000);
       if (current.wsReady || !current.lastInput) {
         return;
       }
 
       this.schedule(current.lastInput);
-    }, delayMs);
+    }, nextDelay + jitterMs);
     session.reconnectTimer.unref?.();
+  }
+
+  private async withBootstrapPermit<T>(task: () => Promise<T>): Promise<T> {
+    if (this.bootstrapsInFlight >= this.maxConcurrentBootstraps) {
+      await new Promise<void>((resolve) => {
+        this.bootstrapWaiters.push(resolve);
+      });
+    }
+
+    this.bootstrapsInFlight += 1;
+    try {
+      return await task();
+    } finally {
+      this.bootstrapsInFlight = Math.max(0, this.bootstrapsInFlight - 1);
+      const next = this.bootstrapWaiters.shift();
+      next?.();
+    }
   }
 
   private mergeStats(sessionKey: string, outcome: RealtimeOutcome): void {
