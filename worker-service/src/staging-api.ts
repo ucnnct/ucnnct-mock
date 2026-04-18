@@ -87,6 +87,9 @@ export class StagingApiDriver {
   private readonly stats = new Map<string, LiveTrafficStats>();
 
   private readonly keycloakBaseUrl = process.env.STAGING_IDENTITY_BASE_URL ?? 'https://auth-staging.uconnect.cc';
+  private readonly keycloakTransportUrl =
+    process.env.STAGING_IDENTITY_TRANSPORT_URL ?? this.keycloakBaseUrl;
+  private readonly keycloakHostHeader = process.env.STAGING_IDENTITY_HOST_HEADER ?? '';
   private readonly keycloakRealm = process.env.STAGING_IDENTITY_REALM ?? 'ucnnct';
   private readonly clientId = process.env.STAGING_IDENTITY_CLIENT_ID ?? 'ucnnct-bff';
   private readonly clientSecret = process.env.STAGING_IDENTITY_CLIENT_SECRET ?? '';
@@ -480,10 +483,13 @@ export class StagingApiDriver {
   private async tokenRequest(params: Record<string, string>): Promise<TokenResponse> {
     const body = new URLSearchParams(params);
     const response = await fetch(
-      `${this.keycloakBaseUrl}/realms/${this.keycloakRealm}/protocol/openid-connect/token`,
+      `${this.keycloakTransportUrl}/realms/${this.keycloakRealm}/protocol/openid-connect/token`,
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          ...(this.keycloakHostHeader ? { Host: this.keycloakHostHeader } : {})
+        },
         body,
         signal: AbortSignal.timeout(12_000)
       }

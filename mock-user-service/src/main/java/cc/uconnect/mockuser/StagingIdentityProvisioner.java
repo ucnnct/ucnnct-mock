@@ -199,7 +199,7 @@ public class StagingIdentityProvisioner {
         "password", required("staging.identity.admin-password")
     );
 
-    HttpRequest request = HttpRequest.newBuilder(adminTokenEndpoint())
+    HttpRequest request = identityRequestBuilder(adminTokenEndpoint())
         .header("Content-Type", "application/x-www-form-urlencoded")
         .POST(HttpRequest.BodyPublishers.ofString(body))
         .timeout(Duration.ofSeconds(12))
@@ -245,7 +245,7 @@ public class StagingIdentityProvisioner {
           json(names[1])
       );
 
-      HttpRequest request = HttpRequest.newBuilder(adminUsersEndpoint())
+      HttpRequest request = identityRequestBuilder(adminUsersEndpoint())
           .header("Authorization", "Bearer " + adminSession.token())
           .header("Content-Type", "application/json")
           .POST(HttpRequest.BodyPublishers.ofString(payload))
@@ -271,7 +271,7 @@ public class StagingIdentityProvisioner {
           }
           """.formatted(json(password));
 
-      HttpRequest request = HttpRequest.newBuilder(adminUserResetPasswordEndpoint(userId))
+      HttpRequest request = identityRequestBuilder(adminUserResetPasswordEndpoint(userId))
           .header("Authorization", "Bearer " + adminSession.token())
           .header("Content-Type", "application/json")
           .PUT(HttpRequest.BodyPublishers.ofString(payload))
@@ -302,7 +302,7 @@ public class StagingIdentityProvisioner {
         "scope", "openid profile email"
     );
 
-    HttpRequest request = HttpRequest.newBuilder(realmTokenEndpoint())
+    HttpRequest request = identityRequestBuilder(realmTokenEndpoint())
         .header("Content-Type", "application/x-www-form-urlencoded")
         .POST(HttpRequest.BodyPublishers.ofString(body))
         .timeout(Duration.ofSeconds(12))
@@ -347,7 +347,7 @@ public class StagingIdentityProvisioner {
 
   private JsonNode findUserByUsername(String adminToken, String username) {
     String query = "?username=" + urlEncode(username) + "&exact=true";
-    HttpRequest request = HttpRequest.newBuilder(URI.create(adminUsersEndpoint().toString() + query))
+    HttpRequest request = identityRequestBuilder(URI.create(adminUsersEndpoint().toString() + query))
         .header("Authorization", "Bearer " + adminToken)
         .header("Accept", "application/json")
         .GET()
@@ -369,7 +369,7 @@ public class StagingIdentityProvisioner {
 
   private JsonNode searchUsers(String adminToken, String prefix, int first, int max) {
     String query = "?search=" + urlEncode(prefix) + "&first=" + first + "&max=" + max;
-    HttpRequest request = HttpRequest.newBuilder(URI.create(adminUsersEndpoint().toString() + query))
+    HttpRequest request = identityRequestBuilder(URI.create(adminUsersEndpoint().toString() + query))
         .header("Authorization", "Bearer " + adminToken)
         .header("Accept", "application/json")
         .GET()
@@ -405,6 +405,15 @@ public class StagingIdentityProvisioner {
     }
   }
 
+  private HttpRequest.Builder identityRequestBuilder(URI uri) {
+    HttpRequest.Builder builder = HttpRequest.newBuilder(uri);
+    String hostHeader = environment.getProperty("staging.identity.host-header");
+    if (hostHeader != null && !hostHeader.isBlank()) {
+      builder.header("Host", hostHeader);
+    }
+    return builder;
+  }
+
   private JsonNode readJson(HttpResponse<String> response) {
     try {
       return objectMapper.readTree(response.body());
@@ -414,15 +423,15 @@ public class StagingIdentityProvisioner {
   }
 
   private URI adminTokenEndpoint() {
-    return URI.create(required("staging.identity.base-url") + "/realms/master/protocol/openid-connect/token");
+    return URI.create(identityTransportBaseUrl() + "/realms/master/protocol/openid-connect/token");
   }
 
   private URI realmTokenEndpoint() {
-    return URI.create(required("staging.identity.base-url") + "/realms/" + realm() + "/protocol/openid-connect/token");
+    return URI.create(identityTransportBaseUrl() + "/realms/" + realm() + "/protocol/openid-connect/token");
   }
 
   private URI adminUsersEndpoint() {
-    return URI.create(required("staging.identity.base-url") + "/admin/realms/" + realm() + "/users");
+    return URI.create(identityTransportBaseUrl() + "/admin/realms/" + realm() + "/users");
   }
 
   private URI adminUserResetPasswordEndpoint(String userId) {
@@ -431,6 +440,10 @@ public class StagingIdentityProvisioner {
 
   private URI targetUsersMeEndpoint() {
     return URI.create(required("staging.identity.target-base-url") + "/api/users/me");
+  }
+
+  private String identityTransportBaseUrl() {
+    return environment.getProperty("staging.identity.transport-url", required("staging.identity.base-url"));
   }
 
   private String realm() {

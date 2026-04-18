@@ -48,6 +48,8 @@ services:
     environment:
       PORT: "7400"
       STAGING_IDENTITY_BASE_URL: "https://auth-staging.uconnect.cc"
+      STAGING_IDENTITY_TRANSPORT_URL: "http://172.31.255.240"
+      STAGING_IDENTITY_HOST_HEADER: "auth-staging.uconnect.cc"
       STAGING_IDENTITY_REALM: "ucnnct"
       STAGING_IDENTITY_CLIENT_ID: "ucnnct-bff"
       STAGING_IDENTITY_CLIENT_SECRET: "MfkAe9Nk7tM1HhqWsCD4A5SuC9ItTDTH"
@@ -66,6 +68,8 @@ services:
       SERVER_PORT: "7500"
       STAGING_IDENTITY_PROVISION_ENABLED: "true"
       STAGING_IDENTITY_BASE_URL: "https://auth-staging.uconnect.cc"
+      STAGING_IDENTITY_TRANSPORT_URL: "http://172.31.255.240"
+      STAGING_IDENTITY_HOST_HEADER: "auth-staging.uconnect.cc"
       STAGING_IDENTITY_REALM: "ucnnct"
       STAGING_IDENTITY_ADMIN_CLIENT_ID: "admin-cli"
       STAGING_IDENTITY_ADMIN_USERNAME: "admin"
