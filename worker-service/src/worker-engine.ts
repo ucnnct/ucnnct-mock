@@ -1071,7 +1071,7 @@ export class WorkerEngine {
           return 'prepare_upload';
         }
         if (user.knownFriends === 0 && user.knownGroups === 0) {
-          return 'fetch_friends';
+          return 'create_group';
         }
         if (
           user.knownGroups > 0 &&
