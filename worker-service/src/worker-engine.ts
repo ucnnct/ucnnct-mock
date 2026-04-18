@@ -348,8 +348,12 @@ export class WorkerEngine {
     return users.map((user) => {
       const sessionKey = this.liveSessionKey(assignment.id, user.id);
       const context = this.stagingApi.getContext(sessionKey);
-      const authenticated = user.authenticated || this.stagingApi.hasAuthenticatedSession(sessionKey);
-      const connectedToWs = authenticated && this.stagingRealtime.isReady(sessionKey);
+      const realtimeReady = this.stagingRealtime.isReady(sessionKey);
+      const authenticated =
+        user.authenticated ||
+        this.stagingApi.hasAuthenticatedSession(sessionKey) ||
+        realtimeReady;
+      const connectedToWs = realtimeReady;
       const knownFriends = context.friendIds.length;
       const knownGroups = context.groupIds.length;
       const currentConversationId = context.currentPeerId ?? user.currentConversationId;
@@ -1109,13 +1113,22 @@ export class WorkerEngine {
     } as const;
 
     switch (action) {
+      case 'login':
+        this.stagingApi.schedule({
+          sessionKey,
+          baseUrl: assignment.targetBaseUrl,
+          action,
+          identity: user.identity,
+          peerCandidates
+        });
+        this.stagingRealtime.schedule(realtimeInput);
+        break;
       case 'send_private_message':
         this.stagingRealtime.schedule(realtimeInput);
         break;
       case 'send_group_message':
         this.stagingRealtime.schedule(realtimeInput);
         break;
-      case 'login':
       case 'open_home':
       case 'fetch_notifications':
       case 'fetch_friends':
