@@ -347,16 +347,38 @@ export class WorkerEngine {
 
     return users.map((user) => {
       const sessionKey = this.liveSessionKey(assignment.id, user.id);
+      const context = this.stagingApi.getContext(sessionKey);
       const authenticated = user.authenticated || this.stagingApi.hasAuthenticatedSession(sessionKey);
       const connectedToWs = authenticated && this.stagingRealtime.isReady(sessionKey);
-      if (authenticated === user.authenticated && connectedToWs === user.connectedToWs) {
+      const knownFriends = context.friendIds.length;
+      const knownGroups = context.groupIds.length;
+      const currentConversationId = context.currentPeerId ?? user.currentConversationId;
+      const currentGroupId = context.currentGroupId;
+      const pendingNotifications = context.pendingNotifications;
+      const uploadPrepared = Boolean(context.preparedUploadKey);
+      if (
+        authenticated === user.authenticated &&
+        connectedToWs === user.connectedToWs &&
+        knownFriends === user.knownFriends &&
+        knownGroups === user.knownGroups &&
+        currentConversationId === user.currentConversationId &&
+        currentGroupId === user.currentGroupId &&
+        pendingNotifications === user.pendingNotifications &&
+        uploadPrepared === user.uploadPrepared
+      ) {
         return user;
       }
 
       return {
         ...user,
         authenticated,
-        connectedToWs
+        connectedToWs,
+        knownFriends,
+        knownGroups,
+        currentConversationId,
+        currentGroupId,
+        pendingNotifications,
+        uploadPrepared
       };
     });
   }
@@ -432,9 +454,9 @@ export class WorkerEngine {
         currentPage: 'HOME',
         currentConversationId: null,
         currentGroupId: null,
-        knownFriends: this.randomInt(10, 88),
-        knownGroups: this.randomInt(0, 9),
-        pendingNotifications: this.randomInt(0, 4),
+        knownFriends: input.targetBaseUrl ? 0 : this.randomInt(10, 88),
+        knownGroups: input.targetBaseUrl ? 0 : this.randomInt(0, 9),
+        pendingNotifications: input.targetBaseUrl ? 0 : this.randomInt(0, 4),
         sessionObjective: null,
         sessionStartedAtMs: null,
         sessionDeadlineAtMs: null,
@@ -500,7 +522,7 @@ export class WorkerEngine {
       'open_private_conversation',
       assignment.weights.privateMessage *
         objectiveBoost.privateMessage *
-        (user.knownFriends > 0 ? 1.2 : 0)
+        (assignment.targetBaseUrl ? 1.2 : user.knownFriends > 0 ? 1.2 : 0)
     );
     addChoice(
       'send_private_message',
@@ -520,8 +542,7 @@ export class WorkerEngine {
       'create_group',
       assignment.weights.group *
         objectiveBoost.group *
-        (user.knownGroups < 3 ? 0.65 : 0.18) *
-        (user.knownFriends > 1 ? 1 : 0)
+        (user.knownGroups < 3 ? 0.75 : 0.2)
     );
     addChoice(
       'add_member',
@@ -625,7 +646,9 @@ export class WorkerEngine {
         return this.outcome(action, requestCost, latencyMs, 'Navigated back to the home feed.');
       case 'fetch_notifications':
         user.currentPage = user.currentPage === 'HOME' ? 'HOME' : user.currentPage;
-        user.pendingNotifications = this.clamp(user.pendingNotifications + this.randomInt(-1, 2), 0, 18);
+        if (!assignment.targetBaseUrl) {
+          user.pendingNotifications = this.clamp(user.pendingNotifications + this.randomInt(-1, 2), 0, 18);
+        }
         this.scheduleLiveTraffic(assignment, user, action);
         return this.outcome(
           action,
@@ -638,7 +661,9 @@ export class WorkerEngine {
         );
       case 'open_notifications':
         user.currentPage = 'NOTIFICATIONS';
-        user.pendingNotifications = this.clamp(user.pendingNotifications - this.randomInt(0, 2), 0, 18);
+        if (!assignment.targetBaseUrl) {
+          user.pendingNotifications = this.clamp(user.pendingNotifications - this.randomInt(0, 2), 0, 18);
+        }
         this.scheduleLiveTraffic(assignment, user, action);
         return this.outcome(
           action,
@@ -651,7 +676,7 @@ export class WorkerEngine {
         );
       case 'fetch_friends':
         user.currentPage = 'FRIENDS';
-        if (Math.random() < 0.12) {
+        if (!assignment.targetBaseUrl && Math.random() < 0.12) {
           user.knownFriends += 1;
         }
         this.scheduleLiveTraffic(assignment, user, action);
@@ -664,17 +689,23 @@ export class WorkerEngine {
       case 'open_private_conversation':
         user.currentPage = 'CONVERSATION';
         user.currentGroupId = null;
-        user.currentConversationId = `dm-${this.randomInt(1, Math.max(user.knownFriends, 2))}`;
+        if (!assignment.targetBaseUrl) {
+          user.currentConversationId = `dm-${this.randomInt(1, Math.max(user.knownFriends, 2))}`;
+        }
         this.scheduleLiveTraffic(assignment, user, action);
         return this.outcome(
           action,
           requestCost,
           latencyMs,
-          `Opened private conversation ${user.currentConversationId}.`
+          assignment.targetBaseUrl
+            ? 'Opened a live private thread from staging.'
+            : `Opened private conversation ${user.currentConversationId}.`
         );
       case 'send_private_message':
         user.currentPage = 'CONVERSATION';
-        user.currentConversationId ??= `dm-${this.randomInt(1, Math.max(user.knownFriends, 2))}`;
+        if (!assignment.targetBaseUrl) {
+          user.currentConversationId ??= `dm-${this.randomInt(1, Math.max(user.knownFriends, 2))}`;
+        }
         user.sentPrivateMessages += 1;
         if (Math.random() < 0.34) {
           user.pendingNotifications = Math.min(user.pendingNotifications + 1, 18);
@@ -684,23 +715,31 @@ export class WorkerEngine {
           action,
           requestCost,
           latencyMs,
-          `Sent a private message in ${user.currentConversationId}.`,
+          assignment.targetBaseUrl
+            ? 'Sent a private message over the live websocket path.'
+            : `Sent a private message in ${user.currentConversationId}.`,
           1
         );
       case 'open_group_conversation':
         user.currentPage = 'GROUP';
         user.currentConversationId = null;
-        user.currentGroupId = `grp-${this.randomInt(1, Math.max(user.knownGroups, 2))}`;
+        if (!assignment.targetBaseUrl) {
+          user.currentGroupId = `grp-${this.randomInt(1, Math.max(user.knownGroups, 2))}`;
+        }
         this.scheduleLiveTraffic(assignment, user, action);
         return this.outcome(
           action,
           requestCost,
           latencyMs,
-          `Opened group thread ${user.currentGroupId}.`
+          assignment.targetBaseUrl
+            ? 'Opened a live group thread from staging.'
+            : `Opened group thread ${user.currentGroupId}.`
         );
       case 'send_group_message':
         user.currentPage = 'GROUP';
-        user.currentGroupId ??= `grp-${this.randomInt(1, Math.max(user.knownGroups, 2))}`;
+        if (!assignment.targetBaseUrl) {
+          user.currentGroupId ??= `grp-${this.randomInt(1, Math.max(user.knownGroups, 2))}`;
+        }
         user.sentGroupMessages += 1;
         user.pendingNotifications = Math.min(user.pendingNotifications + this.randomInt(0, 2), 18);
         this.scheduleLiveTraffic(assignment, user, action);
@@ -708,35 +747,47 @@ export class WorkerEngine {
           action,
           requestCost,
           latencyMs,
-          `Posted a group message in ${user.currentGroupId}.`,
+          assignment.targetBaseUrl
+            ? 'Posted a group message over the live websocket path.'
+            : `Posted a group message in ${user.currentGroupId}.`,
           1
         );
       case 'create_group':
         user.currentPage = 'GROUP';
         user.currentConversationId = null;
-        user.knownGroups += 1;
-        user.currentGroupId = `grp-new-${crypto.randomUUID().slice(0, 5)}`;
+        if (!assignment.targetBaseUrl) {
+          user.knownGroups += 1;
+          user.currentGroupId = `grp-new-${crypto.randomUUID().slice(0, 5)}`;
+        }
         this.scheduleLiveTraffic(assignment, user, action);
         return this.outcome(
           action,
           requestCost,
           latencyMs,
-          `Created ${user.currentGroupId}; total known groups is now ${user.knownGroups}.`
+          assignment.targetBaseUrl
+            ? 'Created a live group on staging.'
+            : `Created ${user.currentGroupId}; total known groups is now ${user.knownGroups}.`
         );
       case 'add_member':
         user.currentPage = 'GROUP';
-        user.currentGroupId ??= `grp-${this.randomInt(1, Math.max(user.knownGroups, 2))}`;
+        if (!assignment.targetBaseUrl) {
+          user.currentGroupId ??= `grp-${this.randomInt(1, Math.max(user.knownGroups, 2))}`;
+        }
         user.pendingNotifications = Math.min(user.pendingNotifications + 1, 18);
         this.scheduleLiveTraffic(assignment, user, action);
         return this.outcome(
           action,
           requestCost,
           latencyMs,
-          `Added a member to ${user.currentGroupId}.`
+          assignment.targetBaseUrl
+            ? 'Added a live member to the current staging group.'
+            : `Added a member to ${user.currentGroupId}.`
         );
       case 'prepare_upload':
         user.currentPage = 'MEDIA';
-        user.uploadPrepared = true;
+        if (!assignment.targetBaseUrl) {
+          user.uploadPrepared = true;
+        }
         this.scheduleLiveTraffic(assignment, user, action);
         return this.outcome(
           action,
@@ -745,7 +796,9 @@ export class WorkerEngine {
           'Prepared upload metadata and reserved a media slot.'
         );
       case 'upload_file':
-        user.uploadPrepared = false;
+        if (!assignment.targetBaseUrl) {
+          user.uploadPrepared = false;
+        }
         user.uploadedFiles += 1;
         user.currentPage = user.currentGroupId ? 'GROUP' : 'CONVERSATION';
         this.scheduleLiveTraffic(assignment, user, action);
@@ -753,13 +806,17 @@ export class WorkerEngine {
           action,
           requestCost,
           latencyMs,
-          `Uploaded an attachment and linked it into ${user.currentGroupId ?? user.currentConversationId ?? 'the current thread'}.`,
+          assignment.targetBaseUrl
+            ? 'Uploaded an attachment through the live media path.'
+            : `Uploaded an attachment and linked it into ${user.currentGroupId ?? user.currentConversationId ?? 'the current thread'}.`,
           0,
           1
         );
       case 'accept_friend_request':
         user.currentPage = 'FRIENDS';
-        user.knownFriends += 1;
+        if (!assignment.targetBaseUrl) {
+          user.knownFriends += 1;
+        }
         user.pendingNotifications = this.clamp(user.pendingNotifications - 1, 0, 18);
         this.scheduleLiveTraffic(assignment, user, action);
         return this.outcome(
@@ -1028,8 +1085,12 @@ export class WorkerEngine {
     }
 
     const sessionKey = this.liveSessionKey(assignment.id, user.id);
-    const peerCandidates = (assignment.assignedUsers ?? []).filter((candidate) => candidate.id !== user.identity?.id);
     const context = this.stagingApi.getContext(sessionKey);
+    const assignedPeers = (assignment.assignedUsers ?? []).filter((candidate) => candidate.id !== user.identity?.id);
+    const peerCandidates =
+      context.friendIds.length > 0
+        ? assignedPeers.filter((candidate) => context.friendIds.includes(candidate.id))
+        : assignedPeers;
 
     this.liveTraffic.schedule({
       sessionKey,

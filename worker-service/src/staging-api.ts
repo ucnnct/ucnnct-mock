@@ -10,9 +10,11 @@ type StagingApiSessionState = {
   selfId: string | null;
   friendIds: string[];
   groupIds: string[];
+  currentPeerId: string | null;
   currentConversationId: string | null;
   currentGroupId: string | null;
   pendingFriendRequestIds: string[];
+  pendingNotifications: number;
   preparedUploadKey: string | null;
   lastStatus: number | null;
   lastActivityAtMs: number | null;
@@ -31,8 +33,10 @@ export type StagingApiContext = {
   selfId: string | null;
   friendIds: string[];
   groupIds: string[];
+  currentPeerId: string | null;
   currentConversationId: string | null;
   currentGroupId: string | null;
+  pendingNotifications: number;
   preparedUploadKey: string | null;
 };
 
@@ -114,8 +118,10 @@ export class StagingApiDriver {
         selfId: null,
         friendIds: [],
         groupIds: [],
+        currentPeerId: null,
         currentConversationId: null,
         currentGroupId: null,
+        pendingNotifications: 0,
         preparedUploadKey: null
       };
     }
@@ -124,8 +130,10 @@ export class StagingApiDriver {
       selfId: session.selfId,
       friendIds: [...session.friendIds],
       groupIds: [...session.groupIds],
+      currentPeerId: session.currentPeerId,
       currentConversationId: session.currentConversationId,
       currentGroupId: session.currentGroupId,
+      pendingNotifications: session.pendingNotifications,
       preparedUploadKey: session.preparedUploadKey
     };
   }
@@ -231,6 +239,9 @@ export class StagingApiDriver {
       session,
       `/api/notifications/users/${encodeURIComponent(selfId)}?limit=20`
     );
+    session.pendingNotifications = (response.body.notifications ?? []).filter(
+      (notification) => (notification.status ?? '').toUpperCase() !== 'READ'
+    ).length;
     return this.combine([response]);
   }
 
@@ -246,6 +257,8 @@ export class StagingApiDriver {
     const conversations = await this.apiJson<ConversationSummary[]>(input.baseUrl, session, '/api/chat/conversations');
     const peerConversation = conversations.body.find((conversation) => conversation.type === 'PEER');
     session.currentConversationId = peerConversation?.id ?? null;
+    session.currentPeerId =
+      peerConversation?.participants.find((participant) => participant !== session.selfId) ?? null;
     return this.combine([conversations]);
   }
 
@@ -598,9 +611,11 @@ export class StagingApiDriver {
         selfId: null,
         friendIds: [],
         groupIds: [],
+        currentPeerId: null,
         currentConversationId: null,
         currentGroupId: null,
         pendingFriendRequestIds: [],
+        pendingNotifications: 0,
         preparedUploadKey: null,
         lastStatus: null,
         lastActivityAtMs: null

@@ -366,21 +366,24 @@ export class StagingRealtimeDriver {
       case 'login':
         return this.combine(
           await this.sendPresenceSubscribe(input, session),
-          await this.sendActiveContext(session, 'HOME', null)
+          await this.sendActiveContext(session, '/', null)
         );
       case 'open_home':
-        return this.sendActiveContext(session, 'HOME', null);
-      case 'fetch_friends':
-        return this.sendPresenceSubscribe(input, session);
+        return this.sendActiveContext(session, '/', null);
       case 'fetch_notifications':
       case 'open_notifications':
-        return this.sendActiveContext(session, 'NOTIFICATIONS', null);
+        return this.sendActiveContext(session, '/notifications', null);
+      case 'fetch_friends':
+        return this.combine(
+          await this.sendPresenceSubscribe(input, session),
+          await this.sendActiveContext(session, '/friends', null)
+        );
       case 'open_private_conversation':
         session.currentPeerId = this.pickPeer(input)?.id ?? session.currentPeerId;
         return this.sendActiveContext(
           session,
           'CONVERSATION',
-          input.context.currentConversationId ?? session.currentPeerId
+          session.currentPeerId
         );
       case 'open_group_conversation':
         session.currentGroupId = input.context.currentGroupId ?? session.currentGroupId;
@@ -437,8 +440,7 @@ export class StagingRealtimeDriver {
       payload: {
         messageId: crypto.randomUUID(),
         receiversId: [peerId],
-        content: `Mock websocket private ${this.shortId()}`,
-        format: 'TEXT'
+        content: `Mock websocket private ${this.shortId()}`
       },
       timestamp: Date.now()
     });
@@ -459,8 +461,7 @@ export class StagingRealtimeDriver {
       payload: {
         messageId: crypto.randomUUID(),
         groupId,
-        content: `Mock websocket group ${this.shortId()}`,
-        format: 'TEXT'
+        content: `Mock websocket group ${this.shortId()}`
       },
       timestamp: Date.now()
     });
