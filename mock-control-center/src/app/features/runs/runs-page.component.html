@@ -234,6 +234,34 @@
           <div><strong>{{ run.p95LatencyMs }} ms</strong><span>p95 latency</span></div>
         </div>
 
+        <div class="subsection">
+          <div class="subsection-header">
+            <span class="eyebrow">Behavior audit</span>
+            <strong>Configured vs observed action mix</strong>
+          </div>
+
+          <div class="detail-grid">
+            <div><strong>{{ run.objectiveMix.share_file }}</strong><span>share-file objective users</span></div>
+            <div><strong>{{ run.actionCounters.prepare_upload }}</strong><span>prepare upload actions</span></div>
+            <div><strong>{{ run.actionCounters.upload_file }}</strong><span>upload file actions</span></div>
+            <div><strong>{{ run.actionCounters.send_private_message }}</strong><span>private messages sent</span></div>
+            <div><strong>{{ run.actionCounters.send_group_message }}</strong><span>group messages sent</span></div>
+            <div><strong>{{ run.actionCounters.fetch_friends }}</strong><span>friend refresh actions</span></div>
+          </div>
+
+          <div class="event-list">
+            <article class="event-row" *ngFor="let row of observedBehaviorRows(run)">
+              <div class="event-topline">
+                <strong>{{ row.label }}</strong>
+                <small class="muted">{{ row.count }} actions</small>
+              </div>
+              <p class="muted">
+                configured {{ row.configuredPercent }}% · observed {{ row.actualPercent }}%
+              </p>
+            </article>
+          </div>
+        </div>
+
         <div class="event-list">
           <article class="event-row" *ngFor="let event of run.events">
             <div class="event-topline">

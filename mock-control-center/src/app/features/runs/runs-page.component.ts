@@ -3,7 +3,7 @@ import { Component, computed, inject, signal } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { FormBuilder, ReactiveFormsModule } from '@angular/forms';
 import { map, startWith } from 'rxjs/operators';
-import { RunDraftInput } from '../../core/models/control-plane.models';
+import { RunDraftInput, RunSummary } from '../../core/models/control-plane.models';
 import { ControlPlaneStore } from '../../core/services/control-plane.store';
 
 @Component({
@@ -201,5 +201,71 @@ export class RunsPageComponent {
 
   protected async stop(runId: string): Promise<void> {
     await this.store.stopRun(runId);
+  }
+
+  protected configuredWeightPercent(run: RunSummary, key: keyof RunSummary['weights']): number {
+    const total = Object.values(run.weights).reduce((sum, value) => sum + value, 0);
+    if (total <= 0) {
+      return 0;
+    }
+    return Math.round((run.weights[key] / total) * 100);
+  }
+
+  protected observedBehaviorRows(run: RunSummary): Array<{
+    label: string;
+    configuredPercent: number;
+    actualPercent: number;
+    count: number;
+  }> {
+    const actionBuckets = [
+      {
+        key: 'browse' as const,
+        label: 'Browse',
+        count: run.actionCounters.open_home
+      },
+      {
+        key: 'privateMessage' as const,
+        label: 'Private messages',
+        count:
+          run.actionCounters.open_private_conversation +
+          run.actionCounters.send_private_message
+      },
+      {
+        key: 'group' as const,
+        label: 'Group activity',
+        count:
+          run.actionCounters.open_group_conversation +
+          run.actionCounters.send_group_message +
+          run.actionCounters.create_group +
+          run.actionCounters.add_member
+      },
+      {
+        key: 'media' as const,
+        label: 'Media',
+        count: run.actionCounters.prepare_upload + run.actionCounters.upload_file
+      },
+      {
+        key: 'social' as const,
+        label: 'Social / friends',
+        count:
+          run.actionCounters.fetch_friends +
+          run.actionCounters.accept_friend_request
+      },
+      {
+        key: 'notificationCheck' as const,
+        label: 'Notification checks',
+        count:
+          run.actionCounters.fetch_notifications +
+          run.actionCounters.open_notifications
+      }
+    ];
+    const totalActual = actionBuckets.reduce((sum, item) => sum + item.count, 0);
+
+    return actionBuckets.map((item) => ({
+      label: item.label,
+      configuredPercent: this.configuredWeightPercent(run, item.key),
+      actualPercent: totalActual > 0 ? Math.round((item.count / totalActual) * 100) : 0,
+      count: item.count
+    }));
   }
 }

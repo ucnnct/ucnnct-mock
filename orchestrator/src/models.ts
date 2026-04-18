@@ -50,6 +50,32 @@ export interface RunEvent {
   detail: string;
 }
 
+export interface ObjectiveMix {
+  browse: number;
+  reply_messages: number;
+  socialize: number;
+  group_activity: number;
+  share_file: number;
+}
+
+export interface ActionCounters {
+  login: number;
+  open_home: number;
+  fetch_notifications: number;
+  fetch_friends: number;
+  open_private_conversation: number;
+  send_private_message: number;
+  open_group_conversation: number;
+  send_group_message: number;
+  create_group: number;
+  add_member: number;
+  prepare_upload: number;
+  upload_file: number;
+  open_notifications: number;
+  accept_friend_request: number;
+  logout: number;
+}
+
 export interface RunSummary extends RunDraftInput {
   id: string;
   status: RunStatus;
@@ -69,6 +95,8 @@ export interface RunSummary extends RunDraftInput {
   errorRate: number;
   p95LatencyMs: number;
   topServices: string[];
+  objectiveMix: ObjectiveMix;
+  actionCounters: ActionCounters;
   events: RunEvent[];
   milestoneIndex: number;
 }

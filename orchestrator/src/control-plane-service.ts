@@ -30,6 +30,24 @@ type WorkerObjectiveMix = {
   share_file: number;
 };
 
+type WorkerActionCounters = {
+  login: number;
+  open_home: number;
+  fetch_notifications: number;
+  fetch_friends: number;
+  open_private_conversation: number;
+  send_private_message: number;
+  open_group_conversation: number;
+  send_group_message: number;
+  create_group: number;
+  add_member: number;
+  prepare_upload: number;
+  upload_file: number;
+  open_notifications: number;
+  accept_friend_request: number;
+  logout: number;
+};
+
 type WorkerAssignment = {
   runId: string;
   assignmentLabel: string;
@@ -61,6 +79,7 @@ type WorkerAssignment = {
   errorRate: number;
   p95LatencyMs: number;
   objectiveMix: WorkerObjectiveMix;
+  actionCounters: WorkerActionCounters;
   recentEvents: Array<{
     id: string;
     timestamp: string;
@@ -654,6 +673,8 @@ export class ControlPlaneService {
       errorRate: 0,
       p95LatencyMs: 0,
       topServices: this.pickTopServices(plan.input.weights),
+      objectiveMix: this.emptyObjectiveMix(),
+      actionCounters: this.emptyActionCounters(),
       events: [
         {
           id: `bootstrap-queued-${crypto.randomUUID().slice(0, 8)}`,
@@ -1145,6 +1166,44 @@ export class ControlPlaneService {
       .sort((left, right) => right.timestamp.localeCompare(left.timestamp))
       .slice(0, 10)
       .map((event) => this.toRunEvent(event));
+    const objectiveMix = assignments.reduce(
+      (aggregate, item) => ({
+        browse: aggregate.browse + item.assignment.objectiveMix.browse,
+        reply_messages: aggregate.reply_messages + item.assignment.objectiveMix.reply_messages,
+        socialize: aggregate.socialize + item.assignment.objectiveMix.socialize,
+        group_activity: aggregate.group_activity + item.assignment.objectiveMix.group_activity,
+        share_file: aggregate.share_file + item.assignment.objectiveMix.share_file
+      }),
+      this.emptyObjectiveMix()
+    );
+    const actionCounters = assignments.reduce(
+      (aggregate, item) => ({
+        login: aggregate.login + item.assignment.actionCounters.login,
+        open_home: aggregate.open_home + item.assignment.actionCounters.open_home,
+        fetch_notifications:
+          aggregate.fetch_notifications + item.assignment.actionCounters.fetch_notifications,
+        fetch_friends: aggregate.fetch_friends + item.assignment.actionCounters.fetch_friends,
+        open_private_conversation:
+          aggregate.open_private_conversation +
+          item.assignment.actionCounters.open_private_conversation,
+        send_private_message:
+          aggregate.send_private_message + item.assignment.actionCounters.send_private_message,
+        open_group_conversation:
+          aggregate.open_group_conversation + item.assignment.actionCounters.open_group_conversation,
+        send_group_message:
+          aggregate.send_group_message + item.assignment.actionCounters.send_group_message,
+        create_group: aggregate.create_group + item.assignment.actionCounters.create_group,
+        add_member: aggregate.add_member + item.assignment.actionCounters.add_member,
+        prepare_upload: aggregate.prepare_upload + item.assignment.actionCounters.prepare_upload,
+        upload_file: aggregate.upload_file + item.assignment.actionCounters.upload_file,
+        open_notifications:
+          aggregate.open_notifications + item.assignment.actionCounters.open_notifications,
+        accept_friend_request:
+          aggregate.accept_friend_request + item.assignment.actionCounters.accept_friend_request,
+        logout: aggregate.logout + item.assignment.actionCounters.logout
+      }),
+      this.emptyActionCounters()
+    );
     const lease = leases
       .filter((candidate) => candidate.runId === runId)
       .sort((left, right) => right.issuedAt.localeCompare(left.issuedAt))[0];
@@ -1183,6 +1242,8 @@ export class ControlPlaneService {
       ),
       p95LatencyMs: Math.max(...assignments.map((item) => item.assignment.p95LatencyMs)),
       topServices: this.pickTopServices(input.weights),
+      objectiveMix,
+      actionCounters,
       events: recentEvents,
       milestoneIndex: [25, 50, 75, 100].filter((mark) => progressPercent >= mark).length
     };
@@ -1209,6 +1270,36 @@ export class ControlPlaneService {
       avgSessionDurationSeconds: assignment.avgSessionDurationSeconds,
       weights: assignment.weights,
       media: assignment.media
+    };
+  }
+
+  private emptyObjectiveMix(): WorkerObjectiveMix {
+    return {
+      browse: 0,
+      reply_messages: 0,
+      socialize: 0,
+      group_activity: 0,
+      share_file: 0
+    };
+  }
+
+  private emptyActionCounters(): WorkerActionCounters {
+    return {
+      login: 0,
+      open_home: 0,
+      fetch_notifications: 0,
+      fetch_friends: 0,
+      open_private_conversation: 0,
+      send_private_message: 0,
+      open_group_conversation: 0,
+      send_group_message: 0,
+      create_group: 0,
+      add_member: 0,
+      prepare_upload: 0,
+      upload_file: 0,
+      open_notifications: 0,
+      accept_friend_request: 0,
+      logout: 0
     };
   }
 
