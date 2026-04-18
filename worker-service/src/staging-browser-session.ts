@@ -1,4 +1,5 @@
 import { AssignedMockUserIdentity } from './models.js';
+import { StagingSessionBootstrapper } from './staging-session-bootstrap.js';
 
 type BrowserAuthOutcome = {
   requests: number;
@@ -12,6 +13,7 @@ type BrowserSessionState = {
   authPromise: Promise<BrowserAuthOutcome> | null;
   authenticated: boolean;
   loginIdentity: AssignedMockUserIdentity | null;
+  sessionStoreId: string | null;
   authFailureCount: number;
   authCooldownUntilMs: number;
   lastStatus: number | null;
@@ -34,6 +36,7 @@ type CookieRecord = {
 
 export class StagingBrowserSessionManager {
   private readonly sessions = new Map<string, BrowserSessionState>();
+  private readonly sessionBootstrapper = new StagingSessionBootstrapper();
   private readonly maxConcurrentAuthentications = Math.max(
     1,
     Number(process.env.BROWSER_AUTH_CONCURRENCY ?? 12)
@@ -82,6 +85,7 @@ export class StagingBrowserSessionManager {
         } catch (error) {
           session.authenticated = false;
           session.cookieJar = new DomainCookieJar();
+          session.sessionStoreId = null;
           session.authFailureCount += 1;
           session.authCooldownUntilMs = Date.now() + this.authenticationBackoffMs(session.authFailureCount);
           throw error;
@@ -107,6 +111,10 @@ export class StagingBrowserSessionManager {
   }
 
   forget(sessionKey: string): void {
+    const session = this.sessions.get(sessionKey);
+    if (session?.sessionStoreId) {
+      void this.sessionBootstrapper.destroy(session.sessionStoreId);
+    }
     this.sessions.delete(sessionKey);
   }
 
@@ -116,6 +124,10 @@ export class StagingBrowserSessionManager {
     identity: AssignedMockUserIdentity,
     session: BrowserSessionState
   ): Promise<BrowserAuthOutcome> {
+    if (this.sessionBootstrapper.isEnabled()) {
+      return this.performRedisSessionBootstrap(sessionKey, baseUrl, identity, session);
+    }
+
     let requests = 0;
     let failures = 0;
     let lastStatus: number | null = null;
@@ -204,6 +216,44 @@ export class StagingBrowserSessionManager {
       session.authenticated = false;
       throw error;
     }
+  }
+
+  private async performRedisSessionBootstrap(
+    sessionKey: string,
+    baseUrl: string,
+    identity: AssignedMockUserIdentity,
+    session: BrowserSessionState
+  ): Promise<BrowserAuthOutcome> {
+    const browserBase = new URL(baseUrl);
+    if (session.sessionStoreId) {
+      await this.sessionBootstrapper.destroy(session.sessionStoreId);
+      session.sessionStoreId = null;
+    }
+    const outcome = await this.sessionBootstrapper.bootstrap(identity);
+    if (!outcome) {
+      throw new Error('Redis session bootstrap was requested without the required configuration');
+    }
+
+    session.cookieJar.setCookie(browserBase, {
+      name: 'uconnect.token.key',
+      value: outcome.sessionCookieValue,
+      path: '/',
+      secure: browserBase.protocol === 'https:',
+      hostOnly: true
+    });
+    session.sessionStoreId = outcome.sessionId;
+    session.authenticated = true;
+    session.authFailureCount = 0;
+    session.authCooldownUntilMs = 0;
+    session.lastStatus = 200;
+    session.lastActivityAtMs = Date.now();
+
+    return {
+      requests: 2,
+      failures: 0,
+      lastStatus: 200,
+      lastActivityAtMs: session.lastActivityAtMs
+    };
   }
 
   private async followRedirects(
@@ -349,6 +399,7 @@ export class StagingBrowserSessionManager {
         authPromise: null,
         authenticated: false,
         loginIdentity: null,
+        sessionStoreId: null,
         authFailureCount: 0,
         authCooldownUntilMs: 0,
         lastStatus: null,
@@ -383,6 +434,23 @@ class DomainCookieJar {
       const key = `${cookie.domain}|${cookie.path}|${cookie.name}`;
       this.cookies.set(key, cookie);
     }
+  }
+
+  setCookie(
+    requestUrl: URL,
+    cookie: Pick<CookieRecord, 'name' | 'value'> &
+      Partial<Pick<CookieRecord, 'domain' | 'path' | 'secure' | 'hostOnly'>>
+  ): void {
+    const normalized: CookieRecord = {
+      name: cookie.name,
+      value: cookie.value,
+      domain: cookie.domain ?? requestUrl.hostname,
+      path: cookie.path ?? this.defaultPath(requestUrl.pathname),
+      secure: cookie.secure ?? requestUrl.protocol === 'https:',
+      hostOnly: cookie.hostOnly ?? true
+    };
+    const key = `${normalized.domain}|${normalized.path}|${normalized.name}`;
+    this.cookies.set(key, normalized);
   }
 
   private parseCookie(requestUrl: URL, rawCookie: string): CookieRecord | null {
