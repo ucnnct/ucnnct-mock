@@ -60,6 +60,8 @@ export interface WorkerAssignmentInput {
   assignmentLabel: string;
   environment: EnvironmentName;
   virtualUsers: number;
+  totalRunVirtualUsers?: number;
+  globalUserOffset?: number;
   durationSeconds: number;
   rampUpSeconds: number;
   thinkTimeMinMs: number;

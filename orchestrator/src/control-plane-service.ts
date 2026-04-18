@@ -749,11 +749,17 @@ export class ControlPlaneService {
     initialTargets: WorkerTarget[],
     createdAssignments: Array<{ target: WorkerTarget; assignmentId: string }>
   ): Promise<void> {
-    const pendingShards = shardSizes.map((virtualUsers, index) => ({
-      index,
-      virtualUsers,
-      assignedUsers: identityBuckets[index]
-    }));
+    let globalUserOffset = 0;
+    const pendingShards = shardSizes.map((virtualUsers, index) => {
+      const shard = {
+        index,
+        virtualUsers,
+        assignedUsers: identityBuckets[index],
+        globalUserOffset
+      };
+      globalUserOffset += virtualUsers;
+      return shard;
+    });
     const assignmentCounts = new Map<string, number>();
     const targetBackoffUntil = new Map<string, number>();
     const dispatchDeadline = Date.now() + 600_000;
@@ -838,6 +844,8 @@ export class ControlPlaneService {
                 assignmentLabel: plan.input.runName,
                 environment: plan.input.environment,
                 virtualUsers: pending.virtualUsers,
+                totalRunVirtualUsers: plan.input.virtualUsers,
+                globalUserOffset: pending.globalUserOffset,
                 durationSeconds: plan.input.durationSeconds,
                 rampUpSeconds: plan.input.rampUpSeconds,
                 thinkTimeMinMs: plan.input.thinkTimeMinMs,

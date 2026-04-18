@@ -1048,17 +1048,22 @@ export class WorkerEngine {
     return this.randomInt(90, Math.max(220, Math.min(assignment.thinkTimeMinMs + 180, 520)));
   }
 
-  private liveLoginJitterMs(input: Pick<WorkerAssignmentInput, 'targetBaseUrl' | 'virtualUsers'>, index: number): number {
+  private liveLoginJitterMs(
+    input: Pick<WorkerAssignmentInput, 'targetBaseUrl' | 'virtualUsers' | 'totalRunVirtualUsers' | 'globalUserOffset'>,
+    index: number
+  ): number {
     if (!input.targetBaseUrl || input.virtualUsers <= 1) {
       return 0;
     }
 
-    const spreadMs = Math.min(180_000, Math.max(6_000, input.virtualUsers * 250));
+    const totalUsers = Math.max(input.totalRunVirtualUsers ?? input.virtualUsers, input.virtualUsers);
+    const globalIndex = Math.min((input.globalUserOffset ?? 0) + index, Math.max(totalUsers - 1, 0));
+    const spreadMs = Math.min(300_000, Math.max(6_000, totalUsers * 250));
     if (spreadMs <= 0) {
       return 0;
     }
 
-    return Math.round((index / Math.max(input.virtualUsers - 1, 1)) * spreadMs);
+    return Math.round((globalIndex / Math.max(totalUsers - 1, 1)) * spreadMs);
   }
 
   private objectiveBoostMap(objective: SessionObjective | null): Record<string, number> {

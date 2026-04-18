@@ -13,6 +13,8 @@ const assignmentSchema = z
     assignmentLabel: z.string().min(3).max(80),
     environment: z.literal('staging'),
     virtualUsers: z.number().int().min(1).max(20_000),
+    totalRunVirtualUsers: z.number().int().min(1).max(20_000).optional(),
+    globalUserOffset: z.number().int().min(0).max(20_000).optional(),
     durationSeconds: z.number().int().min(30).max(7_200),
     rampUpSeconds: z.number().int().min(0).max(3_600),
     thinkTimeMinMs: z.number().int().min(0).max(60_000),
