@@ -108,6 +108,7 @@ type WorkerTarget = WorkerPodTarget & { kind: 'pod' | 'service' };
 type WorkerSource = { target: WorkerTarget; runtime: WorkerRuntime; assignments: WorkerAssignment[] };
 type WorkerAssignmentRef = { target: WorkerTarget; assignment: WorkerAssignment };
 type BootstrapRun = { summary: RunSummary; cancelled: boolean; leaseId: string | null };
+type DispatchHold = { summary: RunSummary; expiresAtMs: number };
 type RunPlan = {
   input: RunDraftInput;
   shardSize: number;
@@ -131,6 +132,7 @@ export class ControlPlaneService {
   private readonly workerController = new KubernetesWorkerController();
   private readonly stagingClusterReader = new StagingClusterReader();
   private readonly bootstrapRuns = new Map<string, BootstrapRun>();
+  private readonly dispatchHolds = new Map<string, DispatchHold>();
   private readonly stoppingRuns = new Map<string, RunSummary>();
   private readonly runPlans = new Map<string, RunPlan>();
 
@@ -229,6 +231,13 @@ export class ControlPlaneService {
   }
 
   async getSnapshot(): Promise<ControlPlaneSnapshot> {
+    const now = Date.now();
+    Array.from(this.dispatchHolds.entries())
+      .filter(([, hold]) => hold.expiresAtMs <= now)
+      .forEach(([runId]) => {
+        this.dispatchHolds.delete(runId);
+      });
+
     const [workerSources, userRuntime, fixtures, leases] = await Promise.all([
       this.loadWorkerSources(),
       this.safeJson<MockUserRuntime | null>(`${this.mockUserOrigin}/api/v1/mock-users/runtime`, null),
@@ -246,6 +255,7 @@ export class ControlPlaneService {
     const liveRunIds = new Set<string>([
       ...groupedAssignments.keys(),
       ...this.bootstrapRuns.keys(),
+      ...this.dispatchHolds.keys(),
       ...this.stoppingRuns.keys()
     ]);
     const leasesToRelease = leases.filter(
@@ -280,6 +290,11 @@ export class ControlPlaneService {
       .forEach(([runId, bootstrapRun]) => {
         runMap.set(runId, bootstrapRun.summary);
       });
+    Array.from(this.dispatchHolds.entries())
+      .filter(([runId]) => !groupedAssignments.has(runId) && !this.bootstrapRuns.has(runId))
+      .forEach(([runId, hold]) => {
+        runMap.set(runId, hold.summary);
+      });
     Array.from(this.stoppingRuns.entries()).forEach(([runId, stoppingSummary]) => {
       const current = runMap.get(runId);
       runMap.set(runId, current ? this.overlayTransientRun(current, stoppingSummary) : stoppingSummary);
@@ -299,6 +314,7 @@ export class ControlPlaneService {
           run.status !== 'paused' &&
           run.status !== 'stopping'
       ) &&
+      this.dispatchHolds.size === 0 &&
       this.workerController.enabled
     ) {
       void this.reconcileWorkerAutoscaling('snapshot-idle');
@@ -413,8 +429,9 @@ export class ControlPlaneService {
 
   async stopRun(runId: string): Promise<RunSummary | null> {
     const bootstrapRun = this.bootstrapRuns.get(runId);
+    const dispatchHold = this.dispatchHolds.get(runId);
     const assignments = await this.findAssignmentsByRunId(runId);
-    if (!bootstrapRun && assignments.length === 0) {
+    if (!bootstrapRun && !dispatchHold && assignments.length === 0) {
       return null;
     }
 
@@ -425,16 +442,20 @@ export class ControlPlaneService {
     const baseSummary =
       assignments.length > 0
         ? await this.summarizeAssignments(runId, assignments)
-        : bootstrapRun?.summary ?? this.createBootstrapSummary(runId, this.runPlans.get(runId)!);
+        : bootstrapRun?.summary ??
+          dispatchHold?.summary ??
+          this.createBootstrapSummary(runId, this.runPlans.get(runId)!);
     const stoppingSummary = this.toStoppingSummary(baseSummary);
 
     if (assignments.length > 0) {
       this.stoppingRuns.set(runId, stoppingSummary);
-    } else {
+    } else if (bootstrapRun) {
       this.updateBootstrapRun(runId, () => stoppingSummary);
+    } else {
+      this.stoppingRuns.set(runId, stoppingSummary);
     }
 
-    void this.completeStopRun(runId, assignments, Boolean(bootstrapRun));
+    void this.completeStopRun(runId, assignments, Boolean(bootstrapRun || dispatchHold));
     return stoppingSummary;
   }
 
@@ -531,6 +552,27 @@ export class ControlPlaneService {
         createdAssignments
       );
 
+      const dispatchTimestamp = new Date().toISOString();
+      const dispatchSummary = this.bootstrapRuns.get(runId)?.summary ?? this.createBootstrapSummary(runId, plan);
+      this.dispatchHolds.set(runId, {
+        summary: {
+          ...dispatchSummary,
+          status: 'starting',
+          updatedAt: dispatchTimestamp,
+          progressPercent: 99,
+          events: [
+            {
+              id: `bootstrap-telemetry-${crypto.randomUUID().slice(0, 8)}`,
+              timestamp: dispatchTimestamp,
+              severity: 'info' as const,
+              title: 'Awaiting worker telemetry',
+              detail: 'All shards were dispatched; keeping worker scale warm until the assignments report back.'
+            },
+            ...dispatchSummary.events
+          ].slice(0, 10)
+        },
+        expiresAtMs: Date.now() + 180_000
+      });
       this.bootstrapRuns.delete(runId);
       console.info(
         `[control-plane] dispatched ${plan.workerShards} shards for run ${runId}`
@@ -662,6 +704,7 @@ export class ControlPlaneService {
       if (assignments.length > 0) {
         this.bootstrapRuns.delete(runId);
       }
+      this.dispatchHolds.delete(runId);
       await this.reconcileWorkerAutoscaling(`stop:${runId}`);
     }
   }
@@ -674,7 +717,7 @@ export class ControlPlaneService {
     const hasBootstrapActivity = Array.from(this.bootstrapRuns.values()).some(
       (run) => !run.cancelled && run.summary.status === 'starting'
     );
-    if (hasBootstrapActivity || this.stoppingRuns.size > 0) {
+    if (hasBootstrapActivity || this.dispatchHolds.size > 0 || this.stoppingRuns.size > 0) {
       return;
     }
 
@@ -1087,6 +1130,7 @@ export class ControlPlaneService {
   }
 
   private aggregateRunSummary(runId: string, assignments: WorkerAssignmentRef[], leases: LeaseRecord[]): RunSummary {
+    this.dispatchHolds.delete(runId);
     const plan = this.runPlans.get(runId);
     const first = assignments[0]!.assignment;
     const input = plan?.input ?? this.draftFromAssignment(first);
