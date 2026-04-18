@@ -612,7 +612,8 @@ export class WorkerEngine {
   ): ActionOutcome {
     const baseLatencyMs = this.baseLatencyForAction(action);
     const latencyMs = Math.round(baseLatencyMs + this.randomInt(8, 72));
-    const failed = Math.random() < this.errorChanceForAction(action);
+    const failed =
+      !assignment.targetBaseUrl && Math.random() < this.errorChanceForAction(action);
     const requestCost = this.requestCostForAction(action);
     const baseThinkTime = this.randomInt(assignment.thinkTimeMinMs, assignment.thinkTimeMaxMs);
     const failureThinkTime = Math.max(350, Math.round(baseThinkTime * 0.55));
