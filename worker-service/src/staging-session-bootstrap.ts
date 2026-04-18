@@ -14,6 +14,7 @@ type TokenResponse = {
   refresh_token?: string;
   id_token?: string;
   expires_in?: number;
+  expires_at?: number;
   refresh_expires_in?: number;
   token_type?: string;
   scope?: string;
@@ -164,7 +165,15 @@ export class StagingSessionBootstrapper {
       throw new Error(`Password grant failed ${response.status}: ${rawBody}`);
     }
 
-    return JSON.parse(rawBody) as TokenResponse;
+    const tokenSet = JSON.parse(rawBody) as TokenResponse;
+    if (typeof tokenSet.expires_at !== 'number' || tokenSet.expires_at <= 0) {
+      tokenSet.expires_at =
+        this.decodeJwtExp(tokenSet.access_token) ??
+        (typeof tokenSet.expires_in === 'number' && tokenSet.expires_in > 0
+          ? Math.floor(Date.now() / 1000) + tokenSet.expires_in
+          : undefined);
+    }
+    return tokenSet;
   }
 
   private generateSessionId(): string {
@@ -188,5 +197,15 @@ export class StagingSessionBootstrapper {
 
     const json = Buffer.from(segments[1]!, 'base64url').toString('utf8');
     return JSON.parse(json) as Record<string, unknown>;
+  }
+
+  private decodeJwtExp(token: string | undefined): number | undefined {
+    if (!token) {
+      return undefined;
+    }
+
+    const claims = this.decodeJwtClaims(token);
+    const exp = claims.exp;
+    return typeof exp === 'number' ? exp : undefined;
   }
 }
