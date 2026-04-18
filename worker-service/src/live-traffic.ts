@@ -125,11 +125,7 @@ export class LiveTrafficDriver {
   ): (() => Promise<LiveTouchOutcome>) | null {
     switch (input.action) {
       case 'login':
-        return () =>
-          this.bootstrapShell(input, session, {
-            ensureAuthenticated: true,
-            withUserInfo: true
-          });
+        return null;
       case 'open_home':
       case 'fetch_notifications':
       case 'fetch_friends':

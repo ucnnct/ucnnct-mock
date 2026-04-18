@@ -169,22 +169,35 @@ export class StagingBrowserSessionManager {
       }
       await this.consumeResponse(response);
 
-      const userinfo = await request(new URL('/bff/userinfo', browserBase), {
-        method: 'GET',
-        redirect: 'manual',
-        headers: {
-          Accept: 'application/json'
-        }
-      });
-
-      if (userinfo.status !== 200) {
-        const body = await userinfo.text();
-        throw new Error(`BFF session validation failed ${userinfo.status}: ${body}`);
+      const hasSessionCookie = this.isAuthenticated(sessionKey, baseUrl);
+      if (!hasSessionCookie) {
+        throw new Error('BFF login flow completed without session cookie');
       }
 
       session.authenticated = true;
       session.authFailureCount = 0;
       session.authCooldownUntilMs = 0;
+
+      // A real browser will already consider the session established once the
+      // callback redirect has completed and the session cookie is set. Keep the
+      // optional userinfo probe best-effort so transient pressure on the BFF
+      // does not force a full OIDC restart for an otherwise valid session.
+      try {
+        const userinfo = await request(new URL('/bff/userinfo', browserBase), {
+          method: 'GET',
+          redirect: 'manual',
+          headers: {
+            Accept: 'application/json'
+          }
+        });
+        if (userinfo.status !== 200) {
+          await this.consumeResponse(userinfo);
+        }
+      } catch {
+        // Ignore transient userinfo failures here. Subsequent API/WS traffic
+        // will validate the session for real.
+      }
+
       return { requests, failures, lastStatus, lastActivityAtMs };
     } catch (error) {
       failures += 1;
@@ -306,9 +319,9 @@ export class StagingBrowserSessionManager {
 
   private authenticationBackoffMs(failureCount: number): number {
     const exponent = Math.max(0, Math.min(failureCount - 1, 5));
-    const baseDelayMs = 2_000 * 2 ** exponent;
-    const jitterMs = Math.floor(Math.random() * 1_000);
-    return Math.min(baseDelayMs + jitterMs, 30_000);
+    const baseDelayMs = 750 * 2 ** exponent;
+    const jitterMs = Math.floor(Math.random() * 500);
+    return Math.min(baseDelayMs + jitterMs, 10_000);
   }
 
   private async withAuthenticationPermit<T>(task: () => Promise<T>): Promise<T> {
