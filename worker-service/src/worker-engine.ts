@@ -502,6 +502,10 @@ export class WorkerEngine {
       return 'open_home';
     }
 
+    if (this.isLiveActivationPhase(assignment, now)) {
+      return this.pickActivationAction(user, assignment);
+    }
+
     if (!user.sessionObjective || Math.random() < 0.05) {
       user.sessionObjective = this.pickObjective(assignment);
     }
@@ -1038,7 +1042,7 @@ export class WorkerEngine {
       return this.randomInt(120, Math.max(assignment.thinkTimeMinMs, 400));
     }
 
-    return this.randomInt(250, Math.max(700, Math.min(assignment.thinkTimeMinMs + 350, 1_400)));
+    return this.randomInt(75, Math.max(240, Math.min(assignment.thinkTimeMinMs + 120, 420)));
   }
 
   private followUpActionDelayMs(
@@ -1063,6 +1067,77 @@ export class WorkerEngine {
     // When gradual online is disabled, do not inject any artificial global
     // staggering. The platform should see the real login pressure immediately.
     return 0;
+  }
+
+  private isLiveActivationPhase(
+    assignment: Pick<
+      WorkerAssignmentRuntime,
+      | 'targetBaseUrl'
+      | 'gradualOnline'
+      | 'startedAtMs'
+      | 'durationSeconds'
+      | 'virtualUsers'
+      | 'connectedUsers'
+    >,
+    now: number
+  ): boolean {
+    if (!assignment.targetBaseUrl || assignment.gradualOnline) {
+      return false;
+    }
+
+    const activationDeadlineMs = Math.min(
+      Math.max(180_000, assignment.virtualUsers * 45),
+      Math.max(240_000, Math.floor(assignment.durationSeconds * 1_000 * 0.7))
+    );
+    const requiredConnectedUsers = Math.max(
+      1,
+      Math.ceil(assignment.virtualUsers * 0.97)
+    );
+
+    return (
+      now - assignment.startedAtMs < activationDeadlineMs &&
+      assignment.connectedUsers < requiredConnectedUsers
+    );
+  }
+
+  private pickActivationAction(
+    user: VirtualUserState,
+    assignment: Pick<WorkerAssignmentRuntime, 'weights'>
+  ): UserAction {
+    const candidates: ActionChoice[] = [];
+    const addChoice = (action: UserAction, weight: number) => {
+      if (weight > 0) {
+        candidates.push({ action, weight });
+      }
+    };
+
+    addChoice('open_home', user.currentPage === 'HOME' ? 2.8 : 3.8);
+    addChoice(
+      'fetch_notifications',
+      user.pendingNotifications > 0
+        ? 1.4 + assignment.weights.notificationCheck * 0.08
+        : 0.8
+    );
+    addChoice(
+      'open_notifications',
+      user.pendingNotifications > 0 ? 1.15 : 0.3
+    );
+    addChoice(
+      'fetch_friends',
+      user.knownFriends === 0
+        ? 1.6 + assignment.weights.social * 0.06
+        : 0.7
+    );
+    addChoice(
+      'open_group_conversation',
+      user.knownGroups > 0 ? 0.35 : 0.12
+    );
+    addChoice(
+      'open_private_conversation',
+      user.knownFriends > 0 ? 0.3 : 0.1
+    );
+
+    return this.pickWeighted(candidates);
   }
 
   private objectiveBoostMap(objective: SessionObjective | null): Record<string, number> {

@@ -212,15 +212,7 @@ export class StagingApiDriver {
     await this.ensureAuthenticated(session, input.identity!);
     const me = await this.apiJson<UserProfile>(input.baseUrl, session, '/api/users/me');
     session.selfId = me.body.keycloakId;
-
-    const friends = await this.apiJson<Array<UserProfile>>(input.baseUrl, session, '/api/friends');
-    session.friendIds = friends.body.map((friend) => friend.keycloakId);
-
-    const groups = await this.apiJson<GroupSummary[]>(input.baseUrl, session, '/api/groups/me');
-    session.groupIds = groups.body.map((group) => group.id);
-    session.currentGroupId = session.groupIds[0] ?? null;
-
-    return this.combine([me, friends, groups]);
+    return this.combine([me]);
   }
 
   private async handleGetMe(input: StagingApiInput, session: StagingApiSessionState): Promise<ApiOutcome> {
