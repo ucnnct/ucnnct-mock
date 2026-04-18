@@ -2,10 +2,10 @@
   <article class="hero panel">
     <div>
       <span class="eyebrow">Scaling</span>
-      <h2>Replica movement, HPA posture and autoscaled worker pressure</h2>
+      <h2>Real replica movement, HPA posture and autoscaled worker pressure</h2>
       <p class="muted">
-        This view is the operator console for the staging target. It shows which service is hot, how far
-        the replicas moved, and how much pressure the worker plane is carrying for the current virtual-user volume.
+        This view now reads real Kubernetes data from the staging cluster for service replicas, HPA posture and pod
+        CPU and memory usage. Worker pressure still comes from the mock execution plane.
       </p>
     </div>
   </article>
@@ -42,11 +42,11 @@
     </div>
 
     <div class="service-grid">
-      <article class="service-card" *ngFor="let service of store.services()">
+        <article class="service-card" *ngFor="let service of store.services()">
         <div class="service-topline">
           <div>
             <strong>{{ service.name }}</strong>
-            <small class="muted">{{ service.namespace }} - {{ service.focus }}</small>
+            <small class="muted">{{ service.namespace }} - {{ service.focus }} - {{ service.workloadKind }}</small>
           </div>
           <span
             class="badge"
@@ -73,10 +73,20 @@
           </div>
         </div>
 
+        <div class="service-bottomline">
+          <span>{{ service.readyReplicas }}/{{ service.targetReplicas }} ready</span>
+          <span>{{ service.podCount }} running pods</span>
+          <span>{{ service.metricsSource === 'cluster' ? 'staging cluster' : 'fallback estimate' }}</span>
+        </div>
+
         <div class="meter">
           <div class="meter-label">
             <span>CPU</span>
-            <strong>{{ service.cpuPercent }}%</strong>
+            <strong>
+              {{ service.cpuPercent }}%<ng-container *ngIf="service.cpuTargetPercent !== null">
+                /{{ service.cpuTargetPercent }}%
+              </ng-container>
+            </strong>
           </div>
           <div class="meter-track"><div class="meter-fill" [style.width.%]="service.cpuPercent"></div></div>
         </div>
@@ -92,13 +102,12 @@
         </div>
 
         <div class="service-bottomline">
-          <span>{{ service.requestRate }} req/s</span>
-          <span>{{ service.trafficShare }}% traffic share</span>
+          <span>{{ service.cpuUsageMillicores }}m CPU</span>
+          <span>{{ service.memoryUsageMi }}Mi memory</span>
+          <span>{{ service.latestScaleAt | date:'short' }}</span>
         </div>
 
-        <div class="sparkline">
-          <span class="spark" *ngFor="let point of service.series" [style.height.%]="point * 14 + 10"></span>
-        </div>
+        <p class="muted">{{ service.note }}</p>
       </article>
     </div>
   </article>

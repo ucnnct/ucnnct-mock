@@ -17,6 +17,10 @@ import {
   WorkerNode
 } from './models.js';
 import { KubernetesWorkerController, WorkerPodTarget } from './kubernetes-worker-controller.js';
+import {
+  StagingClusterReader,
+  StagingServiceDefinition
+} from './staging-cluster-reader.js';
 
 type WorkerObjectiveMix = {
   browse: number;
@@ -116,25 +120,16 @@ type ServiceDefinition = {
   id: string;
   name: string;
   focus: ServiceScaling['focus'];
-  minReplicas: number;
-  maxReplicas: number;
+  fallbackMinReplicas: number;
+  fallbackMaxReplicas: number;
   note: string;
-};
-
-type DemandSnapshot = {
-  activeUsers: number;
-  connectedUsers: number;
-  requestsPerSecond: number;
-  messagesPerSecond: number;
-  uploadsPerMinute: number;
-  groupWeight: number;
-  socialWeight: number;
 };
 
 export class ControlPlaneService {
   private readonly workerOrigin = process.env.WORKER_SERVICE_ORIGIN ?? 'http://localhost:7400';
   private readonly mockUserOrigin = process.env.MOCK_USER_SERVICE_ORIGIN ?? 'http://localhost:7500';
   private readonly workerController = new KubernetesWorkerController();
+  private readonly stagingClusterReader = new StagingClusterReader();
   private readonly bootstrapRuns = new Map<string, BootstrapRun>();
   private readonly stoppingRuns = new Map<string, RunSummary>();
   private readonly runPlans = new Map<string, RunPlan>();
@@ -194,14 +189,14 @@ export class ControlPlaneService {
   ];
 
   private readonly serviceDefinitions: ServiceDefinition[] = [
-    { id: 'svc-front', name: 'web-frontend', focus: 'frontend', minReplicas: 2, maxReplicas: 8, note: 'Frontend reacts mainly to browse and navigation density.' },
-    { id: 'svc-bff', name: 'bff', focus: 'gateway', minReplicas: 2, maxReplicas: 8, note: 'Gateway pressure follows mixed HTTP traffic and auth fan-in.' },
-    { id: 'svc-ws', name: 'ws-manager', focus: 'realtime', minReplicas: 3, maxReplicas: 10, note: 'Realtime load rises with socket occupancy and message spikes.' },
-    { id: 'svc-chat', name: 'chat-service', focus: 'chat', minReplicas: 2, maxReplicas: 8, note: 'Mongo persistence and message fan-out dominate here.' },
-    { id: 'svc-group', name: 'group-service', focus: 'group', minReplicas: 2, maxReplicas: 6, note: 'Group resolution becomes visible when group intent dominates.' },
-    { id: 'svc-media', name: 'media-service', focus: 'media', minReplicas: 1, maxReplicas: 6, note: 'Uploads are rare but produce sharp bursts toward MinIO.' },
-    { id: 'svc-notif', name: 'notification-service', focus: 'notifications', minReplicas: 2, maxReplicas: 8, note: 'Notification fan-out reacts to message, social and group churn.' },
-    { id: 'svc-user', name: 'user-service', focus: 'identity', minReplicas: 2, maxReplicas: 6, note: 'Friends, profiles and social graph reads keep this service warm.' }
+    { id: 'svc-front', name: 'web-frontend', focus: 'frontend', fallbackMinReplicas: 2, fallbackMaxReplicas: 8, note: 'Frontend reacts mainly to browse and navigation density.' },
+    { id: 'svc-bff', name: 'bff', focus: 'gateway', fallbackMinReplicas: 2, fallbackMaxReplicas: 8, note: 'Gateway pressure follows mixed HTTP traffic and auth fan-in.' },
+    { id: 'svc-ws', name: 'ws-manager', focus: 'realtime', fallbackMinReplicas: 3, fallbackMaxReplicas: 10, note: 'Realtime load rises with socket occupancy and message spikes.' },
+    { id: 'svc-chat', name: 'chat-service', focus: 'chat', fallbackMinReplicas: 2, fallbackMaxReplicas: 8, note: 'Mongo persistence and message fan-out dominate here.' },
+    { id: 'svc-group', name: 'group-service', focus: 'group', fallbackMinReplicas: 2, fallbackMaxReplicas: 6, note: 'Group resolution becomes visible when group intent dominates.' },
+    { id: 'svc-media', name: 'media-service', focus: 'media', fallbackMinReplicas: 1, fallbackMaxReplicas: 6, note: 'Uploads are rare but produce sharp bursts toward MinIO.' },
+    { id: 'svc-notif', name: 'notification-service', focus: 'notifications', fallbackMinReplicas: 2, fallbackMaxReplicas: 8, note: 'Notification fan-out reacts to message, social and group churn.' },
+    { id: 'svc-user', name: 'user-service', focus: 'identity', fallbackMinReplicas: 2, fallbackMaxReplicas: 6, note: 'Friends, profiles and social graph reads keep this service warm.' }
   ];
 
   async health(): Promise<Record<string, unknown>> {
@@ -219,7 +214,8 @@ export class ControlPlaneService {
       dependencies: {
         workerService: worker?.status ?? (targets.length > 0 ? 'ok' : 'down'),
         mockUserService: mockUsers?.status ?? 'down',
-        kubernetesWorkerController: this.workerController.enabled ? 'enabled' : 'disabled'
+        kubernetesWorkerController: this.workerController.enabled ? 'enabled' : 'disabled',
+        stagingClusterReader: this.stagingClusterReader.enabled ? 'enabled' : 'disabled'
       },
       generatedAt: new Date().toISOString()
     };
@@ -284,7 +280,7 @@ export class ControlPlaneService {
 
     const runs = Array.from(runMap.values()).sort((left, right) => right.startedAt.localeCompare(left.startedAt));
 
-    const services = this.buildServices(runs);
+    const services = await this.buildServices(runs);
     const workerNodes = this.buildWorkerNodes(workerSources);
     const dashboard = this.buildDashboard(runs, services, workerSources, workerNodes);
 
@@ -1180,45 +1176,68 @@ export class ControlPlaneService {
     );
   }
 
-  private buildServices(runs: RunSummary[]): ServiceScaling[] {
+  private async buildServices(runs: RunSummary[]): Promise<ServiceScaling[]> {
+    if (this.stagingClusterReader.enabled) {
+      try {
+        const clusterServices = await this.stagingClusterReader.listServiceScaling(
+          this.serviceDefinitions as StagingServiceDefinition[]
+        );
+        if (clusterServices) {
+          return clusterServices as ServiceScaling[];
+        }
+      } catch (error) {
+        console.error(
+          '[control-plane] failed to read real staging service metrics:',
+          error instanceof Error ? error.message : error
+        );
+      }
+    }
+
+    return this.buildEstimatedServices(runs);
+  }
+
+  private buildEstimatedServices(runs: RunSummary[]): ServiceScaling[] {
     const demand = this.aggregateDemand(runs.filter((run) => run.status === 'running' || run.status === 'starting'));
     const pressures = this.serviceDefinitions.map((definition) => ({
       definition,
       pressure: this.pressureFor(definition.focus, demand)
     }));
-    const totalPressure = pressures.reduce((sum, item) => sum + item.pressure, 0) || 1;
 
     return pressures.map(({ definition, pressure }) => {
       const cpuPercent = Math.round(this.clamp(8 + pressure + Math.random() * 4, 5, 96));
-      const memoryPercent = Math.round(this.clamp(20 + definition.minReplicas * 5 + pressure * 0.42 + Math.random() * 4, 12, 92));
+      const memoryPercent = Math.round(this.clamp(20 + definition.fallbackMinReplicas * 5 + pressure * 0.42 + Math.random() * 4, 12, 92));
       const targetReplicas = this.clamp(
-        Math.max(definition.minReplicas, Math.round(Math.max(cpuPercent / 23, memoryPercent / 32))),
-        definition.minReplicas,
-        definition.maxReplicas
+        Math.max(definition.fallbackMinReplicas, Math.round(Math.max(cpuPercent / 23, memoryPercent / 32))),
+        definition.fallbackMinReplicas,
+        definition.fallbackMaxReplicas
       );
       const currentReplicas = this.clamp(
-        targetReplicas - (cpuPercent > 56 && targetReplicas > definition.minReplicas ? 1 : 0),
-        definition.minReplicas,
-        definition.maxReplicas
+        targetReplicas - (cpuPercent > 56 && targetReplicas > definition.fallbackMinReplicas ? 1 : 0),
+        definition.fallbackMinReplicas,
+        definition.fallbackMaxReplicas
       );
       return {
         id: definition.id,
         name: definition.name,
         namespace: 'staging',
         focus: definition.focus,
+        workloadKind: 'Unknown',
+        metricsSource: 'estimated',
         currentReplicas,
         targetReplicas,
-        minReplicas: definition.minReplicas,
-        maxReplicas: definition.maxReplicas,
+        readyReplicas: currentReplicas,
+        podCount: currentReplicas,
+        minReplicas: definition.fallbackMinReplicas,
+        maxReplicas: definition.fallbackMaxReplicas,
         cpuPercent,
+        cpuTargetPercent: null,
+        cpuUsageMillicores: 0,
         memoryPercent,
-        requestRate: Math.round(pressure * 11),
-        trafficShare: Math.round((pressure / totalPressure) * 100),
+        memoryUsageMi: 0,
         latestScaleAt: new Date(Date.now() - (targetReplicas === currentReplicas ? 14 : 3) * 60_000).toISOString(),
         hpaState: targetReplicas === currentReplicas ? 'Steady' : currentReplicas < targetReplicas ? 'Scaling up' : 'Scaling down',
         status: targetReplicas !== currentReplicas ? 'scaling' : cpuPercent > 82 || memoryPercent > 82 ? 'attention' : 'healthy',
-        series: this.buildReplicaSeries(currentReplicas, targetReplicas),
-        note: definition.note
+        note: `Estimated fallback. ${definition.note}`
       };
     });
   }
@@ -1273,14 +1292,22 @@ export class ControlPlaneService {
 
   private buildScalingEvents(services: ServiceScaling[], runs: RunSummary[], workerSources: WorkerSource[]): ScalingEvent[] {
     const serviceEvents = services
-      .filter((service) => service.currentReplicas !== service.targetReplicas || service.status === 'attention')
+      .filter(
+        (service) =>
+          service.currentReplicas !== service.targetReplicas ||
+          service.readyReplicas !== service.targetReplicas ||
+          service.status === 'attention'
+      )
       .slice(0, 6)
       .map((service) => ({
         id: `scale-${service.id}-${service.currentReplicas}-${service.targetReplicas}`,
         timestamp: service.latestScaleAt,
         severity: service.currentReplicas < service.targetReplicas ? 'success' as const : 'warning' as const,
         serviceName: service.name,
-        detail: `Replicas are at ${service.currentReplicas}/${service.targetReplicas}; CPU ${service.cpuPercent}% and memory ${service.memoryPercent}%.`
+        detail:
+          `${service.metricsSource === 'cluster' ? 'Cluster' : 'Estimated'} metrics: ` +
+          `${service.readyReplicas}/${service.targetReplicas} ready pods, CPU ${service.cpuPercent}%` +
+          `${service.cpuTargetPercent != null ? `/${service.cpuTargetPercent}%` : ''}, memory ${service.memoryPercent}%.`
       }));
     const runEvents = runs
       .filter((run) => run.status === 'starting' || run.status === 'running' || run.status === 'stopping')
@@ -1304,7 +1331,7 @@ export class ControlPlaneService {
       .slice(0, 12);
   }
 
-  private aggregateDemand(runs: RunSummary[]): DemandSnapshot {
+  private aggregateDemand(runs: RunSummary[]) {
     const totalWeight = runs.reduce((sum, run) => sum + run.weights.browse + run.weights.privateMessage + run.weights.group + run.weights.media + run.weights.social + run.weights.notificationCheck, 0);
     return {
       activeUsers: runs.reduce((sum, run) => sum + run.activeUsers, 0),
@@ -1317,7 +1344,7 @@ export class ControlPlaneService {
     };
   }
 
-  private pressureFor(focus: ServiceScaling['focus'], demand: DemandSnapshot): number {
+  private pressureFor(focus: ServiceScaling['focus'], demand: ReturnType<ControlPlaneService['aggregateDemand']>): number {
     switch (focus) {
       case 'frontend': return demand.requestsPerSecond * 0.12 + demand.activeUsers * 0.03;
       case 'gateway': return demand.requestsPerSecond * 0.17 + demand.connectedUsers * 0.015;
@@ -1328,10 +1355,6 @@ export class ControlPlaneService {
       case 'notifications': return demand.messagesPerSecond * 4.8 + demand.socialWeight * demand.activeUsers * 0.03;
       case 'identity': return demand.socialWeight * demand.activeUsers * 0.035 + demand.requestsPerSecond * 0.025;
     }
-  }
-
-  private buildReplicaSeries(currentReplicas: number, targetReplicas: number): number[] {
-    return Array.from({ length: 12 }, (_, index) => Math.max(1, currentReplicas + (index < 8 ? -1 : 0) + (index === 11 ? targetReplicas - currentReplicas : 0)));
   }
 
   private pickTopServices(weights: BehaviorWeights): string[] {

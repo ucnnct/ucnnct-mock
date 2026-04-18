@@ -86,18 +86,22 @@ export interface ServiceScaling {
   name: string;
   namespace: string;
   focus: ServiceFocus;
+  workloadKind: 'Rollout' | 'Deployment' | 'Unknown';
+  metricsSource: 'cluster' | 'estimated';
   currentReplicas: number;
   targetReplicas: number;
+  readyReplicas: number;
+  podCount: number;
   minReplicas: number;
   maxReplicas: number;
   cpuPercent: number;
+  cpuTargetPercent: number | null;
+  cpuUsageMillicores: number;
   memoryPercent: number;
-  requestRate: number;
-  trafficShare: number;
+  memoryUsageMi: number;
   latestScaleAt: string;
   hpaState: string;
   status: HealthState;
-  series: number[];
   note: string;
 }
 
