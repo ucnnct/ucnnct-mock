@@ -42,7 +42,7 @@ export class StagingRealtimeDriver {
   private readonly stats = new Map<string, LiveTrafficStats>();
   private readonly maxConcurrentBootstraps = Math.max(
     1,
-    Number(process.env.WS_BOOTSTRAP_CONCURRENCY ?? 6)
+    Number(process.env.WS_BOOTSTRAP_CONCURRENCY ?? 2)
   );
   private bootstrapsInFlight = 0;
   private readonly bootstrapWaiters: Array<() => void> = [];
@@ -240,7 +240,7 @@ export class StagingRealtimeDriver {
           Origin: httpBase.origin,
           'User-Agent': 'ucnnct-mock-worker/0.4 (+staging-ws)'
         },
-        handshakeTimeout: 12_000
+        handshakeTimeout: 20_000
       });
 
       const timeout = setTimeout(() => {
@@ -250,7 +250,7 @@ export class StagingRealtimeDriver {
         settled = true;
         socket.terminate();
         reject(new Error(`WebSocket handshake timeout for ${wsUrl}`));
-      }, 12_500);
+      }, 20_500);
 
       socket.once('open', () => {
         if (settled) {

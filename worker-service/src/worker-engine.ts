@@ -499,22 +499,7 @@ export class WorkerEngine {
     }
 
     if (assignment.targetBaseUrl && !user.connectedToWs) {
-      const warmupChoices: ActionChoice[] = [];
-      const addWarmupChoice = (action: UserAction, weight: number) => {
-        if (weight > 0) {
-          warmupChoices.push({ action, weight });
-        }
-      };
-
-      addWarmupChoice('open_home', Math.max(assignment.weights.browse, 1));
-      addWarmupChoice('fetch_notifications', Math.max(assignment.weights.notificationCheck, 1));
-      addWarmupChoice('fetch_friends', Math.max(assignment.weights.social, 1));
-      addWarmupChoice('open_private_conversation', Math.max(assignment.weights.privateMessage * 0.8, 1));
-      addWarmupChoice('open_group_conversation', Math.max(assignment.weights.group * 0.8, 1));
-
-      if (warmupChoices.length > 0) {
-        return this.pickWeighted(warmupChoices);
-      }
+      return 'open_home';
     }
 
     if (!user.sessionObjective || Math.random() < 0.05) {
@@ -1040,42 +1025,7 @@ export class WorkerEngine {
       return [];
     }
 
-    const actions: UserAction[] = ['open_home', 'fetch_notifications', 'fetch_friends'];
-
-    switch (objective) {
-      case 'reply_messages':
-        actions.push('open_private_conversation', 'send_private_message', 'send_private_message');
-        break;
-      case 'group_activity':
-        actions.push('create_group', 'add_member', 'open_group_conversation', 'send_group_message');
-        break;
-      case 'share_file':
-        actions.push('open_private_conversation');
-        if (assignment.media.uploadProbability > 0) {
-          actions.push('prepare_upload', 'upload_file');
-        }
-        break;
-      case 'socialize':
-        actions.push('open_notifications', 'accept_friend_request');
-        if (assignment.weights.group > 0) {
-          actions.push('create_group', 'add_member');
-        }
-        break;
-      case 'browse':
-      default:
-        if (assignment.weights.privateMessage > 0) {
-          actions.push('open_private_conversation', 'send_private_message');
-        }
-        if (assignment.weights.group > 0) {
-          actions.push('open_group_conversation');
-        }
-        if (assignment.weights.notificationCheck > 0) {
-          actions.push('open_notifications');
-        }
-        break;
-    }
-
-    return actions;
+    return ['open_home'];
   }
 
   private postLoginDelayMs(
@@ -1085,7 +1035,7 @@ export class WorkerEngine {
       return this.randomInt(120, Math.max(assignment.thinkTimeMinMs, 400));
     }
 
-    return this.randomInt(80, Math.max(180, Math.min(assignment.thinkTimeMinMs + 120, 320)));
+    return this.randomInt(250, Math.max(700, Math.min(assignment.thinkTimeMinMs + 350, 1_400)));
   }
 
   private followUpActionDelayMs(
@@ -1103,7 +1053,7 @@ export class WorkerEngine {
       return 0;
     }
 
-    const spreadMs = Math.min(60_000, Math.max(6_000, input.virtualUsers * 300));
+    const spreadMs = Math.min(180_000, Math.max(6_000, input.virtualUsers * 250));
     if (spreadMs <= 0) {
       return 0;
     }
@@ -1218,13 +1168,6 @@ export class WorkerEngine {
         ? assignedPeers.filter((candidate) => context.friendIds.includes(candidate.id))
         : assignedPeers;
 
-    this.liveTraffic.schedule({
-      sessionKey,
-      baseUrl: assignment.targetBaseUrl,
-      action,
-      connectedToWs: user.connectedToWs
-    });
-
     const realtimeInput = {
       sessionKey,
       baseUrl: assignment.targetBaseUrl,
@@ -1234,6 +1177,16 @@ export class WorkerEngine {
       context
     } as const;
     const shouldForceRealtimeBootstrap = !user.connectedToWs;
+    const bootstrapOnly = shouldForceRealtimeBootstrap && action !== 'login';
+
+    if (!bootstrapOnly) {
+      this.liveTraffic.schedule({
+        sessionKey,
+        baseUrl: assignment.targetBaseUrl,
+        action,
+        connectedToWs: user.connectedToWs
+      });
+    }
 
     switch (action) {
       case 'login':
@@ -1258,23 +1211,27 @@ export class WorkerEngine {
       case 'open_private_conversation':
       case 'open_group_conversation':
       case 'open_notifications':
-        this.stagingApi.schedule({
-          sessionKey,
-          baseUrl: assignment.targetBaseUrl,
-          action,
-          identity: user.identity,
-          peerCandidates
-        });
+        if (!bootstrapOnly) {
+          this.stagingApi.schedule({
+            sessionKey,
+            baseUrl: assignment.targetBaseUrl,
+            action,
+            identity: user.identity,
+            peerCandidates
+          });
+        }
         this.stagingRealtime.schedule(realtimeInput);
         break;
       default:
-        this.stagingApi.schedule({
-          sessionKey,
-          baseUrl: assignment.targetBaseUrl,
-          action,
-          identity: user.identity,
-          peerCandidates
-        });
+        if (!bootstrapOnly) {
+          this.stagingApi.schedule({
+            sessionKey,
+            baseUrl: assignment.targetBaseUrl,
+            action,
+            identity: user.identity,
+            peerCandidates
+          });
+        }
         // Keep retrying the realtime bootstrap until the websocket is ready so
         // every live virtual user reaches the same entry point as the frontend.
         if (shouldForceRealtimeBootstrap) {
