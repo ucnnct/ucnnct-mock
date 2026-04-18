@@ -9,6 +9,7 @@ type StagingRealtimeInput = {
   baseUrl: string;
   action: UserAction;
   identity: AssignedMockUserIdentity | null;
+  accessToken?: string | null;
   peerCandidates: AssignedMockUserIdentity[];
   context: StagingApiContext;
 };
@@ -75,7 +76,7 @@ export class StagingRealtimeDriver {
   }
 
   schedule(input: StagingRealtimeInput): void {
-    if (!input.baseUrl || !input.identity?.password) {
+    if (!input.baseUrl || (!input.identity?.password && !input.accessToken)) {
       if (input.action === 'logout') {
         this.forget(input.sessionKey);
       }
@@ -123,7 +124,13 @@ export class StagingRealtimeDriver {
     input: StagingRealtimeInput,
     session: RealtimeSessionState
   ): Promise<RealtimeOutcome> {
-    const bootstrap = await this.ensureConnected(input.sessionKey, input.baseUrl, input.identity!, session);
+    const bootstrap = await this.ensureConnected(
+      input.sessionKey,
+      input.baseUrl,
+      input.identity!,
+      input.accessToken ?? null,
+      session
+    );
     const action = await this.handleAction(input, session);
     return this.combine(bootstrap, action);
   }
@@ -132,6 +139,7 @@ export class StagingRealtimeDriver {
     sessionKey: string,
     baseUrl: string,
     identity: AssignedMockUserIdentity,
+    accessToken: string | null,
     session: RealtimeSessionState
   ): Promise<RealtimeOutcome> {
     if (session.wsReady && session.ws?.readyState === WebSocket.OPEN) {
@@ -139,7 +147,7 @@ export class StagingRealtimeDriver {
     }
 
     if (!session.connectPromise) {
-      session.connectPromise = this.bootstrapSession(sessionKey, baseUrl, identity, session)
+      session.connectPromise = this.bootstrapSession(sessionKey, baseUrl, identity, accessToken, session)
         .finally(() => {
           const current = this.sessions.get(sessionKey);
           if (current) {
@@ -155,8 +163,16 @@ export class StagingRealtimeDriver {
     sessionKey: string,
     baseUrl: string,
     identity: AssignedMockUserIdentity,
+    accessToken: string | null,
     session: RealtimeSessionState
   ): Promise<RealtimeOutcome> {
+    if (accessToken) {
+      const wsStatus = await this.openWebSocket(sessionKey, session, baseUrl, accessToken);
+      session.lastStatus = wsStatus.lastStatus;
+      session.lastActivityAtMs = wsStatus.lastActivityAtMs;
+      return wsStatus;
+    }
+
     let requests = 0;
     let failures = 0;
     let lastStatus: number | null = null;
@@ -239,7 +255,8 @@ export class StagingRealtimeDriver {
   private async openWebSocket(
     sessionKey: string,
     session: RealtimeSessionState,
-    baseUrl: string
+    baseUrl: string,
+    accessToken?: string | null
   ): Promise<RealtimeOutcome> {
     if (session.ws) {
       session.ws.removeAllListeners();
@@ -257,7 +274,7 @@ export class StagingRealtimeDriver {
     wsUrl.protocol = httpBase.protocol === 'https:' ? 'wss:' : 'ws:';
 
     const cookieHeader = session.cookieJar.headerValue(wsUrl);
-    if (!cookieHeader) {
+    if (!accessToken && !cookieHeader) {
       throw new Error('Cannot open websocket without BFF session cookie');
     }
 
@@ -265,7 +282,8 @@ export class StagingRealtimeDriver {
       let settled = false;
       const socket = new WebSocket(wsUrl, {
         headers: {
-          Cookie: cookieHeader,
+          ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
           Origin: httpBase.origin,
           'User-Agent': 'ucnnct-mock-worker/0.4 (+staging-ws)'
         },

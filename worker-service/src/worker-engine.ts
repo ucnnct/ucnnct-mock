@@ -1165,6 +1165,7 @@ export class WorkerEngine {
 
     const sessionKey = this.liveSessionKey(assignment.id, user.id);
     const context = this.stagingApi.getContext(sessionKey);
+    const accessToken = this.stagingApi.getAccessToken(sessionKey);
     const assignedPeers = (assignment.assignedUsers ?? []).filter((candidate) => candidate.id !== user.identity?.id);
     const peerCandidates =
       context.friendIds.length > 0
@@ -1183,6 +1184,7 @@ export class WorkerEngine {
       baseUrl: assignment.targetBaseUrl,
       action,
       identity: user.identity,
+      accessToken,
       peerCandidates,
       context
     } as const;
