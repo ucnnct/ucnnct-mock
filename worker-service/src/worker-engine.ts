@@ -1214,6 +1214,7 @@ export class WorkerEngine {
       peerCandidates,
       context
     } as const;
+    const shouldForceRealtimeBootstrap = !user.connectedToWs;
 
     switch (action) {
       case 'login':
@@ -1255,6 +1256,11 @@ export class WorkerEngine {
           identity: user.identity,
           peerCandidates
         });
+        // Keep retrying the realtime bootstrap until the websocket is ready so
+        // every live virtual user reaches the same entry point as the frontend.
+        if (shouldForceRealtimeBootstrap) {
+          this.stagingRealtime.schedule(realtimeInput);
+        }
         break;
     }
   }
