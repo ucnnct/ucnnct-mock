@@ -506,7 +506,16 @@ export class WorkerEngine {
       return this.pickActivationAction(user, assignment);
     }
 
-    if (!user.sessionObjective || Math.random() < 0.05) {
+    if (!user.sessionObjective) {
+      user.sessionObjective = this.pickObjective(assignment);
+    }
+
+    const directedAction = this.pickObjectiveDirectedAction(user, assignment);
+    if (directedAction) {
+      return directedAction;
+    }
+
+    if (Math.random() < 0.08) {
       user.sessionObjective = this.pickObjective(assignment);
     }
 
@@ -574,12 +583,12 @@ export class WorkerEngine {
       'prepare_upload',
       assignment.weights.media *
         objectiveBoost.media *
-        (user.uploadPrepared ? 0 : assignment.media.uploadProbability * 8) *
-        (user.currentConversationId || user.currentGroupId ? 1 : 0)
+        (user.uploadPrepared ? 0 : Math.max(0.22, assignment.media.uploadProbability) * 16) *
+        (user.currentConversationId || user.currentGroupId ? 1.35 : 0.18)
     );
     addChoice(
       'upload_file',
-      assignment.weights.media * objectiveBoost.media * (user.uploadPrepared ? 2.4 : 0)
+      assignment.weights.media * objectiveBoost.media * (user.uploadPrepared ? 5.2 : 0)
     );
     addChoice(
       'accept_friend_request',
@@ -1013,16 +1022,90 @@ export class WorkerEngine {
   }
 
   private pickObjective(assignment: WorkerAssignmentRuntime): SessionObjective {
+    const mediaWeight = assignment.weights.media * (0.45 + assignment.media.uploadProbability * 1.8);
+
     return this.pickWeighted<SessionObjective>([
-      { action: 'browse', weight: assignment.weights.browse + assignment.weights.notificationCheck * 0.4 },
       {
-        action: 'reply_messages',
-        weight: assignment.weights.privateMessage + assignment.weights.notificationCheck * 0.25
+        action: 'browse',
+        weight: Math.max(0.2, assignment.weights.browse + assignment.weights.notificationCheck * 0.35)
       },
-      { action: 'socialize', weight: assignment.weights.social + assignment.weights.browse * 0.2 },
-      { action: 'group_activity', weight: assignment.weights.group + assignment.weights.social * 0.15 },
-      { action: 'share_file', weight: assignment.weights.media + assignment.weights.privateMessage * 0.1 }
+      { action: 'reply_messages', weight: Math.max(0.2, assignment.weights.privateMessage) },
+      { action: 'socialize', weight: Math.max(0.2, assignment.weights.social) },
+      { action: 'group_activity', weight: Math.max(0.2, assignment.weights.group) },
+      { action: 'share_file', weight: Math.max(0.2, mediaWeight) }
     ]);
+  }
+
+  private pickObjectiveDirectedAction(
+    user: VirtualUserState,
+    assignment: Pick<WorkerAssignmentRuntime, 'weights' | 'media'>
+  ): UserAction | null {
+    switch (user.sessionObjective) {
+      case 'reply_messages':
+        if (user.currentConversationId) {
+          return 'send_private_message';
+        }
+        if (user.knownFriends === 0) {
+          return 'fetch_friends';
+        }
+        return 'open_private_conversation';
+      case 'group_activity':
+        if (user.currentGroupId) {
+          if (
+            user.knownFriends > 0 &&
+            Math.random() < Math.min(0.32, 0.08 + assignment.weights.social * 0.015)
+          ) {
+            return 'add_member';
+          }
+          return 'send_group_message';
+        }
+        if (user.knownGroups === 0) {
+          return 'create_group';
+        }
+        return 'open_group_conversation';
+      case 'share_file':
+        if (user.uploadPrepared) {
+          return 'upload_file';
+        }
+        if (user.currentConversationId || user.currentGroupId) {
+          return 'prepare_upload';
+        }
+        if (user.knownFriends === 0 && user.knownGroups === 0) {
+          return 'fetch_friends';
+        }
+        if (
+          user.knownGroups > 0 &&
+          assignment.weights.group >= assignment.weights.privateMessage * 0.8 &&
+          Math.random() < 0.45
+        ) {
+          return 'open_group_conversation';
+        }
+        if (user.knownFriends > 0) {
+          return 'open_private_conversation';
+        }
+        if (user.knownGroups > 0) {
+          return 'open_group_conversation';
+        }
+        return 'create_group';
+      case 'socialize':
+        if (user.pendingNotifications > 0) {
+          return user.currentPage === 'NOTIFICATIONS' ? 'accept_friend_request' : 'open_notifications';
+        }
+        if (user.currentPage !== 'FRIENDS' || user.knownFriends === 0) {
+          return 'fetch_friends';
+        }
+        return null;
+      case 'browse':
+        if (
+          user.pendingNotifications > 0 &&
+          assignment.weights.notificationCheck >= assignment.weights.browse * 0.8
+        ) {
+          return user.currentPage === 'NOTIFICATIONS' ? 'fetch_notifications' : 'open_notifications';
+        }
+        return user.currentPage === 'HOME' ? null : 'open_home';
+      default:
+        return null;
+    }
   }
 
   private buildBootstrapActions(
@@ -1153,7 +1236,14 @@ export class WorkerEngine {
       case 'group_activity':
         return { browse: 0.7, privateMessage: 0.8, group: 1.95, media: 0.95, social: 0.9, notifications: 1.1 };
       case 'share_file':
-        return { browse: 0.6, privateMessage: 0.9, group: 1, media: 2.2, social: 0.65, notifications: 0.8 };
+        return {
+          browse: 0.45,
+          privateMessage: 1.15,
+          group: 1.15,
+          media: 3.1,
+          social: 0.6,
+          notifications: 0.7
+        };
       default:
         return { browse: 1, privateMessage: 1, group: 1, media: 1, social: 1, notifications: 1 };
     }

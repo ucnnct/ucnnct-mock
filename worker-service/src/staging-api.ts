@@ -342,6 +342,7 @@ export class StagingApiDriver {
 
   private async handlePrepareUpload(input: StagingApiInput, session: StagingApiSessionState): Promise<ApiOutcome> {
     await this.ensureAuthenticated(session, input.identity!);
+    const payload = this.buildUploadPayload(input.identity?.username ?? 'mock');
     const response = await this.apiJson<{ objectKey?: string }>(
       input.baseUrl,
       session,
@@ -349,9 +350,9 @@ export class StagingApiDriver {
       {
         method: 'POST',
         body: JSON.stringify({
-          fileName: `mock-${this.shortId()}.txt`,
-          mimeType: 'text/plain',
-          size: 64,
+          fileName: payload.fileName,
+          mimeType: payload.mimeType,
+          size: payload.size,
           folder: 'mock-worker'
         })
       }
@@ -362,9 +363,11 @@ export class StagingApiDriver {
 
   private async handleUploadFile(input: StagingApiInput, session: StagingApiSessionState): Promise<ApiOutcome> {
     await this.ensureAuthenticated(session, input.identity!);
+    const payload = this.buildUploadPayload(input.identity?.username ?? 'mock');
     const upload = await this.uploadMultipart(input.baseUrl, session, '/api/media/upload?folder=mock-worker', {
-      fileName: `mock-${this.shortId()}.txt`,
-      content: `Mock upload from ${input.identity!.username} at ${new Date().toISOString()}`
+      fileName: payload.fileName,
+      mimeType: payload.mimeType,
+      content: payload.content
     });
 
     const objectKey = upload.body.key;
@@ -480,10 +483,10 @@ export class StagingApiDriver {
     baseUrl: string,
     session: StagingApiSessionState,
     path: string,
-    payload: { fileName: string; content: string }
+    payload: { fileName: string; mimeType: string; content: string }
   ): Promise<{ body: UploadResponse; status: number }> {
     const form = new FormData();
-    form.append('file', new globalThis.Blob([payload.content], { type: 'text/plain' }), payload.fileName);
+    form.append('file', new globalThis.Blob([payload.content], { type: payload.mimeType }), payload.fileName);
 
     const response = await this.browserSessions.fetchWithSession(session.sessionKey, new URL(path, baseUrl), {
       method: 'POST',
@@ -574,6 +577,37 @@ export class StagingApiDriver {
     return kind === 'private'
       ? `Mock private message ${suffix}`
       : `Mock group message ${suffix}`;
+  }
+
+  private buildUploadPayload(username: string): {
+    fileName: string;
+    mimeType: string;
+    size: number;
+    content: string;
+  } {
+    const extension = Math.random() < 0.55 ? 'txt' : 'json';
+    const mimeType = extension === 'json' ? 'application/json' : 'text/plain';
+    const header =
+      extension === 'json'
+        ? JSON.stringify({
+            source: 'mock-worker',
+            username,
+            generatedAt: new Date().toISOString()
+          }) + '\n'
+        : `Mock upload from ${username} at ${new Date().toISOString()}\n`;
+    const targetSize = 96 * 1024 + Math.floor(Math.random() * 96 * 1024);
+    const chunk = extension === 'json' ? '{"kind":"mock-upload","payload":"staging-media"}\n' : 'staging-media-payload\n';
+    let content = header;
+    while (content.length < targetSize) {
+      content += chunk;
+    }
+
+    return {
+      fileName: `mock-${this.shortId()}.${extension}`,
+      mimeType,
+      size: Buffer.byteLength(content, 'utf8'),
+      content
+    };
   }
 
   private shortId(): string {
