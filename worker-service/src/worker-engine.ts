@@ -84,7 +84,7 @@ type ActionOutcome = {
 export class WorkerEngine {
   private assignments: WorkerAssignmentRuntime[] = [];
   private readonly browserSessions = new StagingBrowserSessionManager();
-  private readonly liveTraffic = new LiveTrafficDriver();
+  private readonly liveTraffic = new LiveTrafficDriver(this.browserSessions);
   private readonly stagingApi = new StagingApiDriver(this.browserSessions);
   private readonly stagingRealtime = new StagingRealtimeDriver(this.browserSessions);
 
@@ -1055,15 +1055,11 @@ export class WorkerEngine {
     if (!input.targetBaseUrl || input.virtualUsers <= 1) {
       return 0;
     }
-
-    const totalUsers = Math.max(input.totalRunVirtualUsers ?? input.virtualUsers, input.virtualUsers);
-    const globalIndex = Math.min((input.globalUserOffset ?? 0) + index, Math.max(totalUsers - 1, 0));
-    const spreadMs = Math.min(300_000, Math.max(6_000, totalUsers * 250));
-    if (spreadMs <= 0) {
-      return 0;
-    }
-
-    return Math.round((globalIndex / Math.max(totalUsers - 1, 1)) * spreadMs);
+    void input;
+    void index;
+    // When gradual online is disabled, do not inject any artificial global
+    // staggering. The platform should see the real login pressure immediately.
+    return 0;
   }
 
   private objectiveBoostMap(objective: SessionObjective | null): Record<string, number> {
@@ -1189,7 +1185,8 @@ export class WorkerEngine {
         sessionKey,
         baseUrl: assignment.targetBaseUrl,
         action,
-        connectedToWs: user.connectedToWs
+        connectedToWs: user.connectedToWs,
+        identity: user.identity
       });
     }
 

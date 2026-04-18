@@ -42,7 +42,7 @@ export class StagingRealtimeDriver {
   private readonly stats = new Map<string, LiveTrafficStats>();
   private readonly maxConcurrentBootstraps = Math.max(
     1,
-    Number(process.env.WS_BOOTSTRAP_CONCURRENCY ?? 2)
+    Number(process.env.WS_BOOTSTRAP_CONCURRENCY ?? 32)
   );
   private bootstrapsInFlight = 0;
   private readonly bootstrapWaiters: Array<() => void> = [];

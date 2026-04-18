@@ -1,5 +1,7 @@
+import { AssignedMockUserIdentity } from './models.js';
+import { StagingBrowserSessionManager } from './staging-browser-session.js';
+
 type LiveSessionState = {
-  cookieJar: CookieJar;
   inflight: boolean;
   pendingInput: LiveTrafficInput | null;
   cachedShellAssetUrls: string[];
@@ -36,6 +38,7 @@ export type LiveTrafficInput = {
     | 'accept_friend_request'
     | 'logout';
   connectedToWs: boolean;
+  identity: AssignedMockUserIdentity | null;
 };
 
 type LiveTouchOutcome = {
@@ -52,6 +55,8 @@ const MAX_ASSET_FETCHES = 3;
 export class LiveTrafficDriver {
   private readonly sessions = new Map<string, LiveSessionState>();
   private readonly stats = new Map<string, LiveTrafficStats>();
+
+  constructor(private readonly browserSessions: StagingBrowserSessionManager) {}
 
   getStats(sessionKey: string): LiveTrafficStats {
     return (
@@ -120,7 +125,11 @@ export class LiveTrafficDriver {
   ): (() => Promise<LiveTouchOutcome>) | null {
     switch (input.action) {
       case 'login':
-        return () => this.bootstrapShell(session, input.baseUrl, { withUserInfo: true });
+        return () =>
+          this.bootstrapShell(input, session, {
+            ensureAuthenticated: true,
+            withUserInfo: true
+          });
       case 'open_home':
       case 'fetch_notifications':
       case 'fetch_friends':
@@ -131,7 +140,8 @@ export class LiveTrafficDriver {
           return null;
         }
         return () =>
-          this.bootstrapShell(session, input.baseUrl, {
+          this.bootstrapShell(input, session, {
+            ensureAuthenticated: false,
             withUserInfo: now - session.lastUserInfoAtMs >= USERINFO_MIN_INTERVAL_MS
           });
       case 'send_private_message':
@@ -148,25 +158,51 @@ export class LiveTrafficDriver {
   }
 
   private async bootstrapShell(
+    input: LiveTrafficInput,
     session: LiveSessionState,
-    baseUrl: string,
-    options: { withUserInfo: boolean }
+    options: { ensureAuthenticated: boolean; withUserInfo: boolean }
   ): Promise<LiveTouchOutcome> {
-    const landing = await this.fetchWithCookies(session, new URL('/', baseUrl));
-    let requests = 1;
-    let failures = landing.ok ? 0 : 1;
-    let lastStatus = landing.status;
-    const lastActivityAtMs = Date.now();
+    let requests = 0;
+    let failures = 0;
+    let lastStatus: number | null = null;
+    let lastActivityAtMs: number | null = null;
+
+    if (options.ensureAuthenticated && input.identity?.password) {
+      const auth = await this.browserSessions.ensureAuthenticated(
+        input.sessionKey,
+        input.baseUrl,
+        input.identity
+      );
+      requests += auth.requests;
+      failures += auth.failures;
+      lastStatus = auth.lastStatus ?? lastStatus;
+      lastActivityAtMs = auth.lastActivityAtMs ?? lastActivityAtMs;
+    }
+
+    const landing = await this.browserSessions.fetchWithSession(
+      input.sessionKey,
+      new URL('/', input.baseUrl),
+      {
+        redirect: 'manual'
+      }
+    );
+    requests += 1;
+    failures += landing.ok ? 0 : 1;
+    lastStatus = landing.status;
+    lastActivityAtMs = Date.now();
     session.lastShellAtMs = lastActivityAtMs;
 
     const contentType = landing.headers.get('content-type') ?? '';
     if (landing.ok && contentType.includes('text/html')) {
       const html = await landing.text();
-      const assetUrls = this.parseShellAssets(baseUrl, html);
+      const assetUrls = this.parseShellAssets(input.baseUrl, html);
       session.cachedShellAssetUrls = assetUrls;
 
       for (const assetUrl of assetUrls.slice(0, MAX_ASSET_FETCHES)) {
-        const assetResponse = await this.fetchWithCookies(session, assetUrl);
+        const assetResponse = await this.browserSessions.fetchWithSession(
+          input.sessionKey,
+          new URL(assetUrl)
+        );
         requests += 1;
         failures += assetResponse.ok ? 0 : 1;
         lastStatus = assetResponse.status;
@@ -175,11 +211,30 @@ export class LiveTrafficDriver {
     }
 
     if (options.withUserInfo) {
-      const userInfo = await this.fetchWithCookies(session, new URL('/bff/userinfo', baseUrl), {
-        redirect: 'manual'
-      });
+      if (!this.browserSessions.isAuthenticated(input.sessionKey, input.baseUrl) && input.identity?.password) {
+        const auth = await this.browserSessions.ensureAuthenticated(
+          input.sessionKey,
+          input.baseUrl,
+          input.identity
+        );
+        requests += auth.requests;
+        failures += auth.failures;
+        lastStatus = auth.lastStatus ?? lastStatus;
+        lastActivityAtMs = auth.lastActivityAtMs ?? lastActivityAtMs;
+      }
+
+      const userInfo = await this.browserSessions.fetchWithSession(
+        input.sessionKey,
+        new URL('/bff/userinfo', input.baseUrl),
+        {
+          redirect: 'manual',
+          headers: {
+            Accept: 'application/json'
+          }
+        }
+      );
       requests += 1;
-      failures += userInfo.ok || userInfo.status === 401 ? 0 : 1;
+      failures += userInfo.ok ? 0 : 1;
       lastStatus = userInfo.status;
       session.lastUserInfoAtMs = Date.now();
       await this.consumeResponse(userInfo);
@@ -195,7 +250,6 @@ export class LiveTrafficDriver {
     let session = this.sessions.get(sessionKey);
     if (!session) {
       session = {
-        cookieJar: new CookieJar(),
         inflight: false,
         pendingInput: null,
         cachedShellAssetUrls: [],
@@ -251,31 +305,6 @@ export class LiveTrafficDriver {
     return [...assetUrls];
   }
 
-  private async fetchWithCookies(
-    session: LiveSessionState,
-    input: string | URL,
-    init?: RequestInit
-  ): Promise<Response> {
-    const headers = new Headers(init?.headers ?? {});
-    const cookieHeader = session.cookieJar.headerValue();
-    if (cookieHeader && !headers.has('Cookie')) {
-      headers.set('Cookie', cookieHeader);
-    }
-    if (!headers.has('User-Agent')) {
-      headers.set('User-Agent', 'ucnnct-mock-worker/0.3 (+staging)');
-    }
-
-    const response = await fetch(input, {
-      ...init,
-      headers,
-      redirect: init?.redirect ?? 'follow',
-      signal: AbortSignal.timeout(12_000)
-    });
-
-    session.cookieJar.capture(response);
-    return response;
-  }
-
   private async consumeResponse(response: Response): Promise<void> {
     const contentType = response.headers.get('content-type') ?? '';
     if (contentType.includes('text/') || contentType.includes('json') || contentType.includes('javascript')) {
@@ -284,45 +313,5 @@ export class LiveTrafficDriver {
     }
 
     await response.arrayBuffer();
-  }
-}
-
-class CookieJar {
-  private readonly cookies = new Map<string, string>();
-
-  headerValue(): string {
-    return [...this.cookies.entries()]
-      .map(([name, value]) => `${name}=${value}`)
-      .join('; ');
-  }
-
-  capture(response: Response): void {
-    const headerBag = response.headers as Headers & { getSetCookie?: () => string[] };
-    const setCookies = typeof headerBag.getSetCookie === 'function'
-      ? headerBag.getSetCookie()
-      : this.fallbackSetCookies(response.headers.get('set-cookie'));
-
-    for (const header of setCookies) {
-      const firstPart = header.split(';', 1)[0]?.trim();
-      if (!firstPart) {
-        continue;
-      }
-
-      const separator = firstPart.indexOf('=');
-      if (separator <= 0) {
-        continue;
-      }
-
-      const name = firstPart.slice(0, separator);
-      const value = firstPart.slice(separator + 1);
-      this.cookies.set(name, value);
-    }
-  }
-
-  private fallbackSetCookies(setCookieHeader: string | null): string[] {
-    if (!setCookieHeader) {
-      return [];
-    }
-    return [setCookieHeader];
   }
 }
