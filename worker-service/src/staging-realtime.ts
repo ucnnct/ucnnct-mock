@@ -27,6 +27,8 @@ type RealtimeSessionState = {
   connectPromise: Promise<RealtimeOutcome> | null;
   inflight: boolean;
   pendingInput: StagingRealtimeInput | null;
+  lastInput: StagingRealtimeInput | null;
+  reconnectTimer: NodeJS.Timeout | null;
   ws: WebSocket | null;
   wsReady: boolean;
   currentPeerId: string | null;
@@ -77,6 +79,9 @@ export class StagingRealtimeDriver {
         session.ws.terminate();
       }
     }
+    if (session?.reconnectTimer) {
+      clearTimeout(session.reconnectTimer);
+    }
 
     this.sessions.delete(sessionKey);
     this.stats.delete(sessionKey);
@@ -92,6 +97,7 @@ export class StagingRealtimeDriver {
 
     const session = this.getOrCreateSession(input.sessionKey);
     session.loginIdentity = input.identity;
+    session.lastInput = input;
 
     if (input.action === 'logout') {
       this.forget(input.sessionKey);
@@ -113,6 +119,10 @@ export class StagingRealtimeDriver {
           lastStatus: null,
           lastActivityAtMs: Date.now()
         });
+        const current = this.sessions.get(input.sessionKey);
+        if (current && !current.wsReady) {
+          this.scheduleReconnect(input.sessionKey, current);
+        }
       })
       .finally(() => {
         const current = this.sessions.get(input.sessionKey);
@@ -202,6 +212,10 @@ export class StagingRealtimeDriver {
 
     session.lastStatus = lastStatus;
     session.lastActivityAtMs = lastActivityAtMs;
+    if (session.reconnectTimer) {
+      clearTimeout(session.reconnectTimer);
+      session.reconnectTimer = null;
+    }
 
     return { requests, failures, lastStatus, lastActivityAtMs };
   }
@@ -366,10 +380,12 @@ export class StagingRealtimeDriver {
     socket.on('close', () => {
       session.wsReady = false;
       session.ws = null;
+      this.scheduleReconnect(sessionKey, session, 1_000);
     });
 
     socket.on('error', () => {
       session.wsReady = false;
+      this.scheduleReconnect(sessionKey, session, 1_000);
     });
   }
 
@@ -526,6 +542,8 @@ export class StagingRealtimeDriver {
         connectPromise: null,
         inflight: false,
         pendingInput: null,
+        lastInput: null,
+        reconnectTimer: null,
         ws: null,
         wsReady: false,
         currentPeerId: null,
@@ -536,6 +554,31 @@ export class StagingRealtimeDriver {
       this.sessions.set(sessionKey, session);
     }
     return session;
+  }
+
+  private scheduleReconnect(
+    sessionKey: string,
+    session: RealtimeSessionState,
+    delayMs = 750
+  ): void {
+    if (session.reconnectTimer || session.wsReady || !session.lastInput) {
+      return;
+    }
+
+    session.reconnectTimer = setTimeout(() => {
+      const current = this.sessions.get(sessionKey);
+      if (!current) {
+        return;
+      }
+
+      current.reconnectTimer = null;
+      if (current.wsReady || !current.lastInput) {
+        return;
+      }
+
+      this.schedule(current.lastInput);
+    }, delayMs);
+    session.reconnectTimer.unref?.();
   }
 
   private mergeStats(sessionKey: string, outcome: RealtimeOutcome): void {
