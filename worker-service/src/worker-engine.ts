@@ -642,7 +642,7 @@ export class WorkerEngine {
         user.sessionDeadlineAtMs = assignment.gradualOnline
           ? now + this.sampleSessionDurationMs(assignment)
           : null;
-        user.bootstrapActions = this.buildBootstrapActions(assignment);
+        user.bootstrapActions = this.buildBootstrapActions(assignment, user.sessionObjective);
         user.sessionRuns += 1;
         user.nextActionAtMs = now + this.postLoginDelayMs(assignment);
         this.scheduleLiveTraffic(assignment, user, action);
@@ -1012,22 +1012,48 @@ export class WorkerEngine {
   }
 
   private buildBootstrapActions(
-    assignment: Pick<WorkerAssignmentRuntime, 'weights' | 'targetBaseUrl'>
+    assignment: Pick<WorkerAssignmentRuntime, 'weights' | 'targetBaseUrl' | 'media'>,
+    objective: SessionObjective | null
   ): UserAction[] {
     if (!assignment.targetBaseUrl) {
       return [];
     }
 
     const actions: UserAction[] = ['open_home', 'fetch_notifications', 'fetch_friends'];
-    if (assignment.weights.privateMessage > 0) {
-      actions.push('open_private_conversation');
+
+    switch (objective) {
+      case 'reply_messages':
+        actions.push('open_private_conversation', 'send_private_message', 'send_private_message');
+        break;
+      case 'group_activity':
+        actions.push('create_group', 'add_member', 'open_group_conversation', 'send_group_message');
+        break;
+      case 'share_file':
+        actions.push('open_private_conversation');
+        if (assignment.media.uploadProbability > 0) {
+          actions.push('prepare_upload', 'upload_file');
+        }
+        break;
+      case 'socialize':
+        actions.push('open_notifications', 'accept_friend_request');
+        if (assignment.weights.group > 0) {
+          actions.push('create_group', 'add_member');
+        }
+        break;
+      case 'browse':
+      default:
+        if (assignment.weights.privateMessage > 0) {
+          actions.push('open_private_conversation', 'send_private_message');
+        }
+        if (assignment.weights.group > 0) {
+          actions.push('open_group_conversation');
+        }
+        if (assignment.weights.notificationCheck > 0) {
+          actions.push('open_notifications');
+        }
+        break;
     }
-    if (assignment.weights.group > 0) {
-      actions.push('open_group_conversation');
-    }
-    if (assignment.weights.notificationCheck > assignment.weights.browse * 0.5) {
-      actions.push('open_notifications');
-    }
+
     return actions;
   }
 

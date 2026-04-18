@@ -451,7 +451,7 @@ public class StagingIdentityProvisioner {
   }
 
   private String buildUsername(int index) {
-    String prefix = environment.getProperty("staging.identity.username-prefix", "mock.staging.user");
+    String prefix = environment.getProperty("staging.identity.username-prefix", "mock.staging");
     return prefix + "." + String.format("%03d", index);
   }
 

@@ -43,6 +43,13 @@ type LoginForm = {
 export class StagingRealtimeDriver {
   private readonly sessions = new Map<string, RealtimeSessionState>();
   private readonly stats = new Map<string, LiveTrafficStats>();
+  private readonly keycloakBaseUrl = process.env.STAGING_IDENTITY_BASE_URL ?? 'https://auth-staging.uconnect.cc';
+  private readonly keycloakTransportUrl =
+    process.env.STAGING_IDENTITY_TRANSPORT_URL ?? this.keycloakBaseUrl;
+  private readonly keycloakHostHeader = process.env.STAGING_IDENTITY_HOST_HEADER ?? '';
+  private readonly keycloakRealm = process.env.STAGING_IDENTITY_REALM ?? 'ucnnct';
+  private readonly clientId = process.env.STAGING_IDENTITY_CLIENT_ID ?? 'ucnnct-bff';
+  private readonly clientSecret = process.env.STAGING_IDENTITY_CLIENT_SECRET ?? '';
 
   getStats(sessionKey: string): LiveTrafficStats {
     return (
@@ -166,81 +173,28 @@ export class StagingRealtimeDriver {
     accessToken: string | null,
     session: RealtimeSessionState
   ): Promise<RealtimeOutcome> {
-    if (accessToken) {
-      const wsStatus = await this.openWebSocket(sessionKey, session, baseUrl, accessToken);
-      session.lastStatus = wsStatus.lastStatus;
-      session.lastActivityAtMs = wsStatus.lastActivityAtMs;
-      return wsStatus;
-    }
-
     let requests = 0;
     let failures = 0;
     let lastStatus: number | null = null;
     let lastActivityAtMs: number | null = null;
 
-    const loginStart = await this.fetchWithCookies(session, new URL('/bff/login', baseUrl), {
-      redirect: 'manual'
-    });
-    requests += 1;
-    lastStatus = loginStart.status;
-    lastActivityAtMs = Date.now();
-
-    const authUrl = this.requireRedirect(loginStart, baseUrl, '/bff/login');
-    await this.consumeResponse(loginStart);
-
-    const authorizeResponse = await this.fetchWithCookies(session, authUrl, { redirect: 'manual' });
-    requests += 1;
-    lastStatus = authorizeResponse.status;
-    lastActivityAtMs = Date.now();
-
-    let callbackUrl: URL;
-    if (this.isRedirect(authorizeResponse)) {
-      callbackUrl = this.requireRedirect(authorizeResponse, authUrl, 'oidc authorize');
-      await this.consumeResponse(authorizeResponse);
-    } else {
-      const html = await authorizeResponse.text();
-      const loginForm = this.parseLoginForm(html, authUrl);
-      const formBody = new URLSearchParams(loginForm.fields);
-      formBody.set('username', identity.username);
-      formBody.set('password', identity.password ?? '');
-      formBody.set('credentialId', formBody.get('credentialId') ?? '');
-
-      const loginSubmit = await this.fetchWithCookies(session, loginForm.action, {
-        method: 'POST',
-        redirect: 'manual',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: formBody
+    let bearerToken = accessToken;
+    if (!bearerToken) {
+      const token = await this.tokenRequest({
+        grant_type: 'password',
+        client_id: this.clientId,
+        client_secret: this.clientSecret,
+        username: identity.username,
+        password: identity.password ?? '',
+        scope: 'openid profile email'
       });
       requests += 1;
-      lastStatus = loginSubmit.status;
+      lastStatus = 200;
       lastActivityAtMs = Date.now();
-
-      callbackUrl = this.requireRedirect(loginSubmit, loginForm.action, 'kc login submit');
-      await this.consumeResponse(loginSubmit);
+      bearerToken = token.access_token;
     }
 
-    const callbackResponse = await this.fetchWithCookies(session, callbackUrl, {
-      redirect: 'manual'
-    });
-    requests += 1;
-    lastStatus = callbackResponse.status;
-    lastActivityAtMs = Date.now();
-    await this.consumeResponse(callbackResponse);
-
-    const userInfo = await this.fetchWithCookies(session, new URL('/bff/userinfo', baseUrl), {
-      redirect: 'manual'
-    });
-    requests += 1;
-    lastStatus = userInfo.status;
-    lastActivityAtMs = Date.now();
-    if (!userInfo.ok) {
-      failures += 1;
-      const body = await userInfo.text();
-      throw new Error(`BFF session did not authenticate ${identity.username}: ${userInfo.status} ${body}`);
-    }
-    await userInfo.text();
-
-    const wsStatus = await this.openWebSocket(sessionKey, session, baseUrl);
+    const wsStatus = await this.openWebSocket(sessionKey, session, baseUrl, bearerToken);
     requests += wsStatus.requests;
     failures += wsStatus.failures;
     lastStatus = wsStatus.lastStatus ?? lastStatus;
@@ -250,6 +204,42 @@ export class StagingRealtimeDriver {
     session.lastActivityAtMs = lastActivityAtMs;
 
     return { requests, failures, lastStatus, lastActivityAtMs };
+  }
+
+  private async tokenRequest(params: Record<string, string>): Promise<{ access_token: string }> {
+    const endpoint = new URL(
+      `/realms/${this.keycloakRealm}/protocol/openid-connect/token`,
+      this.keycloakTransportUrl.endsWith('/')
+        ? this.keycloakTransportUrl
+        : `${this.keycloakTransportUrl}/`
+    );
+    const body = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== '') {
+        body.set(key, value);
+      }
+    }
+
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Accept: 'application/json',
+        ...(this.keycloakHostHeader ? { Host: this.keycloakHostHeader } : {})
+      },
+      body
+    });
+
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`Realtime password grant failed: ${response.status} ${text}`);
+    }
+
+    const payload = JSON.parse(text) as { access_token?: string };
+    if (!payload.access_token) {
+      throw new Error('Realtime password grant did not return access_token');
+    }
+    return { access_token: payload.access_token };
   }
 
   private async openWebSocket(
