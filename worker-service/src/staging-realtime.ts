@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import WebSocket from 'ws';
 import { AssignedMockUserIdentity, UserAction } from './models.js';
+import { StagingBrowserSessionManager } from './staging-browser-session.js';
 import type { LiveTrafficStats } from './live-traffic.js';
 import type { StagingApiContext } from './staging-api.js';
 
@@ -9,7 +10,6 @@ type StagingRealtimeInput = {
   baseUrl: string;
   action: UserAction;
   identity: AssignedMockUserIdentity | null;
-  accessToken?: string | null;
   peerCandidates: AssignedMockUserIdentity[];
   context: StagingApiContext;
 };
@@ -23,7 +23,6 @@ type RealtimeOutcome = {
 
 type RealtimeSessionState = {
   loginIdentity: AssignedMockUserIdentity | null;
-  cookieJar: DomainCookieJar;
   connectPromise: Promise<RealtimeOutcome> | null;
   inflight: boolean;
   pendingInput: StagingRealtimeInput | null;
@@ -37,21 +36,11 @@ type RealtimeSessionState = {
   lastActivityAtMs: number | null;
 };
 
-type LoginForm = {
-  action: URL;
-  fields: Record<string, string>;
-};
-
 export class StagingRealtimeDriver {
   private readonly sessions = new Map<string, RealtimeSessionState>();
   private readonly stats = new Map<string, LiveTrafficStats>();
-  private readonly keycloakBaseUrl = process.env.STAGING_IDENTITY_BASE_URL ?? 'https://auth-staging.uconnect.cc';
-  private readonly keycloakTransportUrl =
-    process.env.STAGING_IDENTITY_TRANSPORT_URL ?? this.keycloakBaseUrl;
-  private readonly keycloakHostHeader = process.env.STAGING_IDENTITY_HOST_HEADER ?? '';
-  private readonly keycloakRealm = process.env.STAGING_IDENTITY_REALM ?? 'ucnnct';
-  private readonly clientId = process.env.STAGING_IDENTITY_CLIENT_ID ?? 'ucnnct-bff';
-  private readonly clientSecret = process.env.STAGING_IDENTITY_CLIENT_SECRET ?? '';
+
+  constructor(private readonly browserSessions: StagingBrowserSessionManager) {}
 
   getStats(sessionKey: string): LiveTrafficStats {
     return (
@@ -85,10 +74,11 @@ export class StagingRealtimeDriver {
 
     this.sessions.delete(sessionKey);
     this.stats.delete(sessionKey);
+    this.browserSessions.forget(sessionKey);
   }
 
   schedule(input: StagingRealtimeInput): void {
-    if (!input.baseUrl || (!input.identity?.password && !input.accessToken)) {
+    if (!input.baseUrl || !input.identity?.password) {
       if (input.action === 'logout') {
         this.forget(input.sessionKey);
       }
@@ -145,7 +135,6 @@ export class StagingRealtimeDriver {
       input.sessionKey,
       input.baseUrl,
       input.identity!,
-      input.accessToken ?? null,
       session
     );
     const action = await this.handleAction(input, session);
@@ -156,7 +145,6 @@ export class StagingRealtimeDriver {
     sessionKey: string,
     baseUrl: string,
     identity: AssignedMockUserIdentity,
-    accessToken: string | null,
     session: RealtimeSessionState
   ): Promise<RealtimeOutcome> {
     if (session.wsReady && session.ws?.readyState === WebSocket.OPEN) {
@@ -164,7 +152,7 @@ export class StagingRealtimeDriver {
     }
 
     if (!session.connectPromise) {
-      session.connectPromise = this.bootstrapSession(sessionKey, baseUrl, identity, accessToken, session)
+      session.connectPromise = this.bootstrapSession(sessionKey, baseUrl, identity, session)
         .finally(() => {
           const current = this.sessions.get(sessionKey);
           if (current) {
@@ -180,7 +168,6 @@ export class StagingRealtimeDriver {
     sessionKey: string,
     baseUrl: string,
     identity: AssignedMockUserIdentity,
-    accessToken: string | null,
     session: RealtimeSessionState
   ): Promise<RealtimeOutcome> {
     let requests = 0;
@@ -188,23 +175,13 @@ export class StagingRealtimeDriver {
     let lastStatus: number | null = null;
     let lastActivityAtMs: number | null = null;
 
-    let bearerToken = accessToken;
-    if (!bearerToken) {
-      const token = await this.tokenRequest({
-        grant_type: 'password',
-        client_id: this.clientId,
-        client_secret: this.clientSecret,
-        username: identity.username,
-        password: identity.password ?? '',
-        scope: 'openid profile email'
-      });
-      requests += 1;
-      lastStatus = 200;
-      lastActivityAtMs = Date.now();
-      bearerToken = token.access_token;
-    }
+    const auth = await this.browserSessions.ensureAuthenticated(sessionKey, baseUrl, identity);
+    requests += auth.requests;
+    failures += auth.failures;
+    lastStatus = auth.lastStatus;
+    lastActivityAtMs = auth.lastActivityAtMs;
 
-    const wsStatus = await this.openWebSocket(sessionKey, session, baseUrl, bearerToken);
+    const wsStatus = await this.openWebSocket(sessionKey, session, baseUrl);
     requests += wsStatus.requests;
     failures += wsStatus.failures;
     lastStatus = wsStatus.lastStatus ?? lastStatus;
@@ -220,47 +197,10 @@ export class StagingRealtimeDriver {
     return { requests, failures, lastStatus, lastActivityAtMs };
   }
 
-  private async tokenRequest(params: Record<string, string>): Promise<{ access_token: string }> {
-    const endpoint = new URL(
-      `/realms/${this.keycloakRealm}/protocol/openid-connect/token`,
-      this.keycloakTransportUrl.endsWith('/')
-        ? this.keycloakTransportUrl
-        : `${this.keycloakTransportUrl}/`
-    );
-    const body = new URLSearchParams();
-    for (const [key, value] of Object.entries(params)) {
-      if (value !== '') {
-        body.set(key, value);
-      }
-    }
-
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        Accept: 'application/json',
-        ...(this.keycloakHostHeader ? { Host: this.keycloakHostHeader } : {})
-      },
-      body
-    });
-
-    const text = await response.text();
-    if (!response.ok) {
-      throw new Error(`Realtime password grant failed: ${response.status} ${text}`);
-    }
-
-    const payload = JSON.parse(text) as { access_token?: string };
-    if (!payload.access_token) {
-      throw new Error('Realtime password grant did not return access_token');
-    }
-    return { access_token: payload.access_token };
-  }
-
   private async openWebSocket(
     sessionKey: string,
     session: RealtimeSessionState,
-    baseUrl: string,
-    accessToken?: string | null
+    baseUrl: string
   ): Promise<RealtimeOutcome> {
     if (session.ws) {
       session.ws.removeAllListeners();
@@ -277,8 +217,8 @@ export class StagingRealtimeDriver {
     const wsUrl = new URL('/ws/uconnect', baseUrl);
     wsUrl.protocol = httpBase.protocol === 'https:' ? 'wss:' : 'ws:';
 
-    const cookieHeader = session.cookieJar.headerValue(wsUrl);
-    if (!accessToken && !cookieHeader) {
+    const cookieHeader = this.browserSessions.cookieHeader(sessionKey, wsUrl);
+    if (!cookieHeader) {
       throw new Error('Cannot open websocket without BFF session cookie');
     }
 
@@ -286,8 +226,7 @@ export class StagingRealtimeDriver {
       let settled = false;
       const socket = new WebSocket(wsUrl, {
         headers: {
-          ...(cookieHeader ? { Cookie: cookieHeader } : {}),
-          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+          Cookie: cookieHeader,
           Origin: httpBase.origin,
           'User-Agent': 'ucnnct-mock-worker/0.4 (+staging-ws)'
         },
@@ -538,7 +477,6 @@ export class StagingRealtimeDriver {
     if (!session) {
       session = {
         loginIdentity: null,
-        cookieJar: new DomainCookieJar(),
         connectPromise: null,
         inflight: false,
         pendingInput: null,
@@ -612,195 +550,7 @@ export class StagingRealtimeDriver {
     };
   }
 
-  private async fetchWithCookies(
-    session: RealtimeSessionState,
-    input: URL,
-    init?: RequestInit
-  ): Promise<Response> {
-    const headers = new Headers(init?.headers ?? {});
-    const cookieHeader = session.cookieJar.headerValue(input);
-    if (cookieHeader && !headers.has('Cookie')) {
-      headers.set('Cookie', cookieHeader);
-    }
-    if (!headers.has('User-Agent')) {
-      headers.set('User-Agent', 'ucnnct-mock-worker/0.4 (+staging-ws)');
-    }
-
-    const response = await fetch(input, {
-      ...init,
-      headers,
-      redirect: init?.redirect ?? 'follow',
-      signal: AbortSignal.timeout(15_000)
-    });
-    session.cookieJar.capture(input, response);
-    return response;
-  }
-
-  private requireRedirect(response: Response, baseUrl: string | URL, context: string): URL {
-    const location = response.headers.get('location');
-    if (!location) {
-      throw new Error(`Missing redirect location for ${context}`);
-    }
-    return new URL(location, baseUrl);
-  }
-
-  private isRedirect(response: Response): boolean {
-    return response.status >= 300 && response.status < 400;
-  }
-
-  private async consumeResponse(response: Response): Promise<void> {
-    const contentType = response.headers.get('content-type') ?? '';
-    if (contentType.includes('text/') || contentType.includes('json') || contentType.includes('javascript')) {
-      await response.text();
-      return;
-    }
-
-    await response.arrayBuffer();
-  }
-
-  private parseLoginForm(html: string, baseUrl: URL): LoginForm {
-    const formMatch = html.match(/<form[^>]+id="kc-form-login"[^>]+action="([^"]+)"/i);
-    if (!formMatch?.[1]) {
-      throw new Error('Unable to parse Keycloak login form action');
-    }
-
-    const action = new URL(this.decodeHtml(formMatch[1]), baseUrl);
-    const fields: Record<string, string> = {};
-
-    for (const match of html.matchAll(/<input\b[^>]*name="([^"]+)"[^>]*>/gi)) {
-      const rawName = match[1];
-      if (!rawName) {
-        continue;
-      }
-      const inputMarkup = match[0];
-      const valueMatch = inputMarkup.match(/value="([^"]*)"/i);
-      fields[this.decodeHtml(rawName)] = this.decodeHtml(valueMatch?.[1] ?? '');
-    }
-
-    return { action, fields };
-  }
-
-  private decodeHtml(value: string): string {
-    return value
-      .replaceAll('&amp;', '&')
-      .replaceAll('&quot;', '"')
-      .replaceAll('&#39;', "'")
-      .replaceAll('&lt;', '<')
-      .replaceAll('&gt;', '>');
-  }
-
   private shortId(): string {
     return Math.random().toString(36).slice(2, 8);
-  }
-}
-
-type CookieRecord = {
-  name: string;
-  value: string;
-  domain: string;
-  path: string;
-  secure: boolean;
-  hostOnly: boolean;
-};
-
-class DomainCookieJar {
-  private readonly cookies = new Map<string, CookieRecord>();
-
-  headerValue(urlLike: URL): string {
-    const url = new URL(urlLike);
-    const cookies = [...this.cookies.values()].filter((cookie) => this.matches(url, cookie));
-    return cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join('; ');
-  }
-
-  capture(requestUrl: URL, response: Response): void {
-    const headers = response.headers as Headers & { getSetCookie?: () => string[] };
-    const setCookies = typeof headers.getSetCookie === 'function'
-      ? headers.getSetCookie()
-      : this.fallbackSetCookies(response.headers.get('set-cookie'));
-
-    for (const rawCookie of setCookies) {
-      const cookie = this.parseCookie(requestUrl, rawCookie);
-      if (!cookie) {
-        continue;
-      }
-
-      const key = `${cookie.domain}|${cookie.path}|${cookie.name}`;
-      this.cookies.set(key, cookie);
-    }
-  }
-
-  private parseCookie(requestUrl: URL, rawCookie: string): CookieRecord | null {
-    const segments = rawCookie.split(';').map((segment) => segment.trim()).filter(Boolean);
-    const first = segments.shift();
-    if (!first) {
-      return null;
-    }
-
-    const separator = first.indexOf('=');
-    if (separator <= 0) {
-      return null;
-    }
-
-    const record: CookieRecord = {
-      name: first.slice(0, separator),
-      value: first.slice(separator + 1),
-      domain: requestUrl.hostname,
-      path: this.defaultPath(requestUrl.pathname),
-      secure: requestUrl.protocol === 'https:',
-      hostOnly: true
-    };
-
-    for (const attribute of segments) {
-      const [rawKey, ...rawRest] = attribute.split('=');
-      const key = rawKey.toLowerCase();
-      const value = rawRest.join('=');
-      switch (key) {
-        case 'domain':
-          record.domain = value.replace(/^\./, '').toLowerCase();
-          record.hostOnly = false;
-          break;
-        case 'path':
-          record.path = value || '/';
-          break;
-        case 'secure':
-          record.secure = true;
-          break;
-        default:
-          break;
-      }
-    }
-
-    return record;
-  }
-
-  private fallbackSetCookies(setCookieHeader: string | null): string[] {
-    if (!setCookieHeader) {
-      return [];
-    }
-    return [setCookieHeader];
-  }
-
-  private defaultPath(pathname: string): string {
-    if (!pathname || !pathname.startsWith('/')) {
-      return '/';
-    }
-    if (pathname === '/') {
-      return '/';
-    }
-    return pathname.slice(0, pathname.lastIndexOf('/') || 1);
-  }
-
-  private matches(url: URL, cookie: CookieRecord): boolean {
-    if (cookie.secure && url.protocol !== 'https:' && url.protocol !== 'wss:') {
-      return false;
-    }
-    if (cookie.hostOnly) {
-      if (url.hostname !== cookie.domain) {
-        return false;
-      }
-    } else if (url.hostname !== cookie.domain && !url.hostname.endsWith(`.${cookie.domain}`)) {
-      return false;
-    }
-    return url.pathname.startsWith(cookie.path);
   }
 }

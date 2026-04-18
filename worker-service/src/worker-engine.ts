@@ -15,6 +15,7 @@ import {
 } from './models.js';
 import { LiveTrafficDriver } from './live-traffic.js';
 import { StagingApiDriver } from './staging-api.js';
+import { StagingBrowserSessionManager } from './staging-browser-session.js';
 import { StagingRealtimeDriver } from './staging-realtime.js';
 
 const TICK_MS = Math.max(150, Number(process.env.WORKER_TICK_MS ?? 500));
@@ -82,9 +83,10 @@ type ActionOutcome = {
 
 export class WorkerEngine {
   private assignments: WorkerAssignmentRuntime[] = [];
+  private readonly browserSessions = new StagingBrowserSessionManager();
   private readonly liveTraffic = new LiveTrafficDriver();
-  private readonly stagingApi = new StagingApiDriver();
-  private readonly stagingRealtime = new StagingRealtimeDriver();
+  private readonly stagingApi = new StagingApiDriver(this.browserSessions);
+  private readonly stagingRealtime = new StagingRealtimeDriver(this.browserSessions);
 
   constructor() {
     this.assignments = this.buildSeedAssignments();
@@ -1191,7 +1193,6 @@ export class WorkerEngine {
 
     const sessionKey = this.liveSessionKey(assignment.id, user.id);
     const context = this.stagingApi.getContext(sessionKey);
-    const accessToken = this.stagingApi.getAccessToken(sessionKey);
     const assignedPeers = (assignment.assignedUsers ?? []).filter((candidate) => candidate.id !== user.identity?.id);
     const peerCandidates =
       context.friendIds.length > 0
@@ -1210,7 +1211,6 @@ export class WorkerEngine {
       baseUrl: assignment.targetBaseUrl,
       action,
       identity: user.identity,
-      accessToken,
       peerCandidates,
       context
     } as const;

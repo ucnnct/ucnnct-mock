@@ -1,13 +1,13 @@
 import { AssignedMockUserIdentity, UserAction } from './models.js';
+import { StagingBrowserSessionManager } from './staging-browser-session.js';
 import type { LiveTrafficStats } from './live-traffic.js';
 
 type StagingApiSessionState = {
+  sessionKey: string;
+  baseUrl: string;
   inflight: boolean;
   pendingInput: StagingApiInput | null;
   loginIdentity: AssignedMockUserIdentity | null;
-  accessToken: string | null;
-  refreshToken: string | null;
-  expiresAtMs: number;
   selfId: string | null;
   friendIds: string[];
   groupIds: string[];
@@ -39,12 +39,6 @@ export type StagingApiContext = {
   currentGroupId: string | null;
   pendingNotifications: number;
   preparedUploadKey: string | null;
-};
-
-type TokenResponse = {
-  access_token: string;
-  refresh_token?: string;
-  expires_in: number;
 };
 
 type UserProfile = {
@@ -86,13 +80,7 @@ export class StagingApiDriver {
   private readonly sessions = new Map<string, StagingApiSessionState>();
   private readonly stats = new Map<string, LiveTrafficStats>();
 
-  private readonly keycloakBaseUrl = process.env.STAGING_IDENTITY_BASE_URL ?? 'https://auth-staging.uconnect.cc';
-  private readonly keycloakTransportUrl =
-    process.env.STAGING_IDENTITY_TRANSPORT_URL ?? this.keycloakBaseUrl;
-  private readonly keycloakHostHeader = process.env.STAGING_IDENTITY_HOST_HEADER ?? '';
-  private readonly keycloakRealm = process.env.STAGING_IDENTITY_REALM ?? 'ucnnct';
-  private readonly clientId = process.env.STAGING_IDENTITY_CLIENT_ID ?? 'ucnnct-bff';
-  private readonly clientSecret = process.env.STAGING_IDENTITY_CLIENT_SECRET ?? '';
+  constructor(private readonly browserSessions: StagingBrowserSessionManager) {}
 
   getStats(sessionKey: string): LiveTrafficStats {
     return (
@@ -106,21 +94,13 @@ export class StagingApiDriver {
   }
 
   hasAuthenticatedSession(sessionKey: string): boolean {
-    const session = this.sessions.get(sessionKey);
-    return Boolean(session?.accessToken) && (session?.expiresAtMs ?? 0) > Date.now();
-  }
-
-  getAccessToken(sessionKey: string): string | null {
-    const session = this.sessions.get(sessionKey);
-    if (!session?.accessToken || (session.expiresAtMs ?? 0) <= Date.now()) {
-      return null;
-    }
-    return session.accessToken;
+    return this.browserSessions.isAuthenticated(sessionKey);
   }
 
   forget(sessionKey: string): void {
     this.sessions.delete(sessionKey);
     this.stats.delete(sessionKey);
+    this.browserSessions.forget(sessionKey);
   }
 
   getContext(sessionKey: string): StagingApiContext {
@@ -159,6 +139,7 @@ export class StagingApiDriver {
     }
 
     const session = this.getOrCreateSession(input.sessionKey);
+    session.baseUrl = input.baseUrl;
     session.loginIdentity = input.identity;
     if (session.inflight) {
       session.pendingInput = input;
@@ -443,63 +424,7 @@ export class StagingApiDriver {
   }
 
   private async ensureAuthenticated(session: StagingApiSessionState, identity: AssignedMockUserIdentity): Promise<void> {
-    const now = Date.now();
-    if (session.accessToken && session.expiresAtMs - 15_000 > now) {
-      return;
-    }
-
-    if (session.refreshToken) {
-      try {
-        const refreshed = await this.tokenRequest({
-          grant_type: 'refresh_token',
-          client_id: this.clientId,
-          client_secret: this.clientSecret,
-          refresh_token: session.refreshToken
-        });
-        this.applyTokenSet(session, refreshed);
-        return;
-      } catch {
-        session.refreshToken = null;
-      }
-    }
-
-    const passwordGrant = await this.tokenRequest({
-      grant_type: 'password',
-      client_id: this.clientId,
-      client_secret: this.clientSecret,
-      username: identity.username,
-      password: identity.password ?? '',
-      scope: 'openid profile email'
-    });
-    this.applyTokenSet(session, passwordGrant);
-  }
-
-  private applyTokenSet(session: StagingApiSessionState, tokenSet: TokenResponse): void {
-    session.accessToken = tokenSet.access_token;
-    session.refreshToken = tokenSet.refresh_token ?? null;
-    session.expiresAtMs = Date.now() + Math.max((tokenSet.expires_in - 5) * 1_000, 30_000);
-  }
-
-  private async tokenRequest(params: Record<string, string>): Promise<TokenResponse> {
-    const body = new URLSearchParams(params);
-    const response = await fetch(
-      `${this.keycloakTransportUrl}/realms/${this.keycloakRealm}/protocol/openid-connect/token`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          ...(this.keycloakHostHeader ? { Host: this.keycloakHostHeader } : {})
-        },
-        body,
-        signal: AbortSignal.timeout(12_000)
-      }
-    );
-
-    if (!response.ok) {
-      throw new Error(`Token endpoint failed: ${response.status}`);
-    }
-
-    return response.json() as Promise<TokenResponse>;
+    await this.browserSessions.ensureAuthenticated(session.sessionKey, session.baseUrl, identity);
   }
 
   private async ensureSelfId(baseUrl: string, session: StagingApiSessionState): Promise<string> {
@@ -529,11 +454,10 @@ export class StagingApiDriver {
     options?: { treatStatusesAsSuccess?: number[] }
   ): Promise<{ body: TBody; status: number }> {
     const request = async (): Promise<Response> =>
-      fetch(`${baseUrl}${path}`, {
+      this.browserSessions.fetchWithSession(session.sessionKey, new URL(path, baseUrl), {
         ...init,
         headers: {
           Accept: 'application/json',
-          Authorization: `Bearer ${session.accessToken}`,
           ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
           ...(init?.headers ?? {})
         },
@@ -542,7 +466,7 @@ export class StagingApiDriver {
 
     let response = await request();
     if (response.status === 401 && session.loginIdentity?.password) {
-      session.accessToken = null;
+      this.browserSessions.forget(session.sessionKey);
       await this.ensureAuthenticated(session, session.loginIdentity);
       response = await request();
     }
@@ -569,11 +493,8 @@ export class StagingApiDriver {
     const form = new FormData();
     form.append('file', new globalThis.Blob([payload.content], { type: 'text/plain' }), payload.fileName);
 
-    const response = await fetch(`${baseUrl}${path}`, {
+    const response = await this.browserSessions.fetchWithSession(session.sessionKey, new URL(path, baseUrl), {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${session.accessToken ?? ''}`
-      },
       body: form,
       signal: AbortSignal.timeout(20_000)
     });
@@ -625,11 +546,10 @@ export class StagingApiDriver {
     if (!session) {
       session = {
         inflight: false,
+        sessionKey,
+        baseUrl: '',
         pendingInput: null,
         loginIdentity: null,
-        accessToken: null,
-        refreshToken: null,
-        expiresAtMs: 0,
         selfId: null,
         friendIds: [],
         groupIds: [],
