@@ -1,6 +1,6 @@
 {
   "name": "worker-service",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "description": "Execution engine for realistic UConnect virtual users.",
   "main": "dist/server.js",
   "scripts": {
