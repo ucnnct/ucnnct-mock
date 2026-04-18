@@ -17,7 +17,7 @@ import { LiveTrafficDriver } from './live-traffic.js';
 import { StagingApiDriver } from './staging-api.js';
 import { StagingRealtimeDriver } from './staging-realtime.js';
 
-const TICK_MS = 2_000;
+const TICK_MS = Math.max(150, Number(process.env.WORKER_TICK_MS ?? 500));
 const USER_SNAPSHOT_LIMIT = 18;
 const MAX_RECENT_EVENTS = 30;
 const MAX_HISTORICAL_ASSIGNMENTS = 12;
@@ -27,6 +27,7 @@ type VirtualUserState = Omit<
   'lastActionAt' | 'nextActionAt' | 'sessionStartedAt'
 > & {
   identity: AssignedMockUserIdentity | null;
+  bootstrapActions: UserAction[];
   activationOffsetMs: number;
   sessionDeadlineAtMs: number | null;
   sessionStartedAtMs: number | null;
@@ -442,7 +443,7 @@ export class WorkerEngine {
       const initialWaveOnline = instantOnlineStart || Math.random() < input.initialOnlineRatio;
       const initialDelayMs = initialWaveOnline
         ? instantOnlineStart
-          ? 0
+          ? this.liveLoginJitterMs(input, index)
           : this.randomInt(250, Math.max(input.thinkTimeMaxMs, 1_400))
         : this.randomInt(
             Math.max(input.avgSessionDurationSeconds * 300, 8_000),
@@ -462,6 +463,7 @@ export class WorkerEngine {
         knownGroups: input.targetBaseUrl ? 0 : this.randomInt(0, 9),
         pendingNotifications: input.targetBaseUrl ? 0 : this.randomInt(0, 4),
         sessionObjective: null,
+        bootstrapActions: [],
         sessionStartedAtMs: null,
         sessionDeadlineAtMs: null,
         lastActionAtMs: now,
@@ -484,6 +486,10 @@ export class WorkerEngine {
   ): UserAction {
     if (!user.authenticated) {
       return 'login';
+    }
+
+    if (user.bootstrapActions.length > 0) {
+      return user.bootstrapActions[0]!;
     }
 
     if (assignment.gradualOnline && user.sessionDeadlineAtMs !== null && now >= user.sessionDeadlineAtMs) {
@@ -620,6 +626,10 @@ export class WorkerEngine {
       };
     }
 
+    if (user.bootstrapActions[0] === action) {
+      user.bootstrapActions = user.bootstrapActions.slice(1);
+    }
+
     switch (action) {
       case 'login': {
         user.authenticated = true;
@@ -632,7 +642,9 @@ export class WorkerEngine {
         user.sessionDeadlineAtMs = assignment.gradualOnline
           ? now + this.sampleSessionDurationMs(assignment)
           : null;
+        user.bootstrapActions = this.buildBootstrapActions(assignment);
         user.sessionRuns += 1;
+        user.nextActionAtMs = now + this.postLoginDelayMs(assignment);
         this.scheduleLiveTraffic(assignment, user, action);
         return {
           detail: `Logged in and requested realtime websocket bootstrap for a ${user.sessionObjective} session${assignment.targetBaseUrl ? ' using live staging traffic.' : '.'}`,
@@ -696,6 +708,9 @@ export class WorkerEngine {
         if (!assignment.targetBaseUrl) {
           user.currentConversationId = `dm-${this.randomInt(1, Math.max(user.knownFriends, 2))}`;
         }
+        if (assignment.targetBaseUrl) {
+          user.nextActionAtMs = now + this.followUpActionDelayMs(assignment);
+        }
         this.scheduleLiveTraffic(assignment, user, action);
         return this.outcome(
           action,
@@ -730,6 +745,9 @@ export class WorkerEngine {
         if (!assignment.targetBaseUrl) {
           user.currentGroupId = `grp-${this.randomInt(1, Math.max(user.knownGroups, 2))}`;
         }
+        if (assignment.targetBaseUrl) {
+          user.nextActionAtMs = now + this.followUpActionDelayMs(assignment);
+        }
         this.scheduleLiveTraffic(assignment, user, action);
         return this.outcome(
           action,
@@ -762,6 +780,9 @@ export class WorkerEngine {
         if (!assignment.targetBaseUrl) {
           user.knownGroups += 1;
           user.currentGroupId = `grp-new-${crypto.randomUUID().slice(0, 5)}`;
+        }
+        if (assignment.targetBaseUrl) {
+          user.nextActionAtMs = now + this.followUpActionDelayMs(assignment);
         }
         this.scheduleLiveTraffic(assignment, user, action);
         return this.outcome(
@@ -838,6 +859,7 @@ export class WorkerEngine {
         user.currentPage = 'HOME';
         user.currentConversationId = null;
         user.currentGroupId = null;
+        user.bootstrapActions = [];
         user.uploadPrepared = false;
         user.sessionObjective = null;
         user.sessionStartedAtMs = null;
@@ -987,6 +1009,59 @@ export class WorkerEngine {
       { action: 'group_activity', weight: assignment.weights.group + assignment.weights.social * 0.15 },
       { action: 'share_file', weight: assignment.weights.media + assignment.weights.privateMessage * 0.1 }
     ]);
+  }
+
+  private buildBootstrapActions(
+    assignment: Pick<WorkerAssignmentRuntime, 'weights' | 'targetBaseUrl'>
+  ): UserAction[] {
+    if (!assignment.targetBaseUrl) {
+      return [];
+    }
+
+    const actions: UserAction[] = ['open_home', 'fetch_notifications', 'fetch_friends'];
+    if (assignment.weights.privateMessage > 0) {
+      actions.push('open_private_conversation');
+    }
+    if (assignment.weights.group > 0) {
+      actions.push('open_group_conversation');
+    }
+    if (assignment.weights.notificationCheck > assignment.weights.browse * 0.5) {
+      actions.push('open_notifications');
+    }
+    return actions;
+  }
+
+  private postLoginDelayMs(
+    assignment: Pick<WorkerAssignmentRuntime, 'targetBaseUrl' | 'thinkTimeMinMs'>
+  ): number {
+    if (!assignment.targetBaseUrl) {
+      return this.randomInt(120, Math.max(assignment.thinkTimeMinMs, 400));
+    }
+
+    return this.randomInt(80, Math.max(180, Math.min(assignment.thinkTimeMinMs + 120, 320)));
+  }
+
+  private followUpActionDelayMs(
+    assignment: Pick<WorkerAssignmentRuntime, 'targetBaseUrl' | 'thinkTimeMinMs'>
+  ): number {
+    if (!assignment.targetBaseUrl) {
+      return this.randomInt(180, Math.max(assignment.thinkTimeMinMs, 500));
+    }
+
+    return this.randomInt(90, Math.max(220, Math.min(assignment.thinkTimeMinMs + 180, 520)));
+  }
+
+  private liveLoginJitterMs(input: Pick<WorkerAssignmentInput, 'targetBaseUrl' | 'virtualUsers'>, index: number): number {
+    if (!input.targetBaseUrl || input.virtualUsers <= 1) {
+      return 0;
+    }
+
+    const spreadMs = Math.min(12_000, Math.max(600, Math.round(input.virtualUsers / 2)));
+    if (spreadMs <= 0) {
+      return 0;
+    }
+
+    return Math.round((index / Math.max(input.virtualUsers - 1, 1)) * spreadMs);
   }
 
   private objectiveBoostMap(objective: SessionObjective | null): Record<string, number> {

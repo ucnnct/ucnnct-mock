@@ -20,24 +20,24 @@ export class RunsPageComponent {
   protected readonly form = this.fb.nonNullable.group({
     runName: 'staging-realistic-01',
     environment: 'staging' as const,
-    virtualUsers: 300,
-    durationSeconds: 900,
-    rampUpSeconds: 120,
-    thinkTimeMinMs: 800,
-    thinkTimeMaxMs: 5000,
+    virtualUsers: 500,
+    durationSeconds: 720,
+    rampUpSeconds: 60,
+    thinkTimeMinMs: 180,
+    thinkTimeMaxMs: 1100,
     gradualOnline: false,
     initialOnlineRatio: 0.75,
-    avgSessionDurationSeconds: 420,
+    avgSessionDurationSeconds: 300,
     weights: this.fb.nonNullable.group({
-      browse: 20,
-      privateMessage: 30,
-      group: 20,
-      media: 10,
+      browse: 12,
+      privateMessage: 32,
+      group: 28,
+      media: 8,
       social: 10,
       notificationCheck: 10
     }),
     media: this.fb.nonNullable.group({
-      uploadProbability: 0.08
+      uploadProbability: 0.06
     })
   });
 
@@ -125,12 +125,15 @@ export class RunsPageComponent {
     if (preset === 'balanced') {
       this.form.patchValue({
         runName: 'staging-realistic-01',
-        virtualUsers: 300,
-        durationSeconds: 900,
-        rampUpSeconds: 120,
+        virtualUsers: 500,
+        durationSeconds: 720,
+        rampUpSeconds: 60,
+        thinkTimeMinMs: 180,
+        thinkTimeMaxMs: 1100,
+        avgSessionDurationSeconds: 300,
         gradualOnline: false,
-        weights: { browse: 20, privateMessage: 30, group: 20, media: 10, social: 10, notificationCheck: 10 },
-        media: { uploadProbability: 0.08 }
+        weights: { browse: 12, privateMessage: 32, group: 28, media: 8, social: 10, notificationCheck: 10 },
+        media: { uploadProbability: 0.06 }
       });
       return;
     }
@@ -138,11 +141,14 @@ export class RunsPageComponent {
     if (preset === 'conversation') {
       this.form.patchValue({
         runName: 'staging-conversation-wave',
-        virtualUsers: 420,
-        durationSeconds: 720,
-        rampUpSeconds: 90,
+        virtualUsers: 600,
+        durationSeconds: 600,
+        rampUpSeconds: 45,
+        thinkTimeMinMs: 120,
+        thinkTimeMaxMs: 800,
+        avgSessionDurationSeconds: 240,
         gradualOnline: false,
-        weights: { browse: 14, privateMessage: 40, group: 24, media: 4, social: 8, notificationCheck: 10 },
+        weights: { browse: 8, privateMessage: 44, group: 30, media: 4, social: 6, notificationCheck: 8 },
         media: { uploadProbability: 0.03 }
       });
       return;
@@ -152,24 +158,29 @@ export class RunsPageComponent {
       this.form.patchValue({
         runName: 'staging-high-volume-example',
         virtualUsers: 10_000,
-        durationSeconds: 900,
-        rampUpSeconds: 300,
+        durationSeconds: 600,
+        rampUpSeconds: 45,
+        thinkTimeMinMs: 120,
+        thinkTimeMaxMs: 700,
         gradualOnline: false,
-        avgSessionDurationSeconds: 480,
-        weights: { browse: 18, privateMessage: 28, group: 22, media: 8, social: 12, notificationCheck: 12 },
-        media: { uploadProbability: 0.04 }
+        avgSessionDurationSeconds: 240,
+        weights: { browse: 8, privateMessage: 40, group: 34, media: 6, social: 6, notificationCheck: 6 },
+        media: { uploadProbability: 0.03 }
       });
       return;
     }
 
     this.form.patchValue({
       runName: 'staging-attachment-burst',
-      virtualUsers: 180,
-      durationSeconds: 600,
-      rampUpSeconds: 75,
+      virtualUsers: 240,
+      durationSeconds: 540,
+      rampUpSeconds: 45,
+      thinkTimeMinMs: 160,
+      thinkTimeMaxMs: 900,
+      avgSessionDurationSeconds: 240,
       gradualOnline: false,
-      weights: { browse: 12, privateMessage: 24, group: 16, media: 32, social: 6, notificationCheck: 10 },
-      media: { uploadProbability: 0.22 }
+      weights: { browse: 8, privateMessage: 22, group: 18, media: 38, social: 4, notificationCheck: 10 },
+      media: { uploadProbability: 0.18 }
     });
   }
 

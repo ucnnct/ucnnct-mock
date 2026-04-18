@@ -199,6 +199,13 @@ export class ControlPlaneService {
     { id: 'svc-user', name: 'user-service', focus: 'identity', fallbackMinReplicas: 2, fallbackMaxReplicas: 6, note: 'Friends, profiles and social graph reads keep this service warm.' }
   ];
 
+  constructor() {
+    void this.reconcileWorkerAutoscaling('startup');
+    setInterval(() => {
+      void this.reconcileWorkerAutoscaling('background');
+    }, 10_000).unref();
+  }
+
   async health(): Promise<Record<string, unknown>> {
     const [targets, worker, mockUsers] = await Promise.all([
       this.listWorkerTargets(true),
@@ -294,7 +301,7 @@ export class ControlPlaneService {
       ) &&
       this.workerController.enabled
     ) {
-      void this.workerController.restoreAutoscaling().catch(() => undefined);
+      void this.reconcileWorkerAutoscaling('snapshot-idle');
     }
 
     return {
@@ -478,6 +485,7 @@ export class ControlPlaneService {
       if (bootstrapRun.cancelled) {
         await this.releaseRunLease(runId);
         this.updateBootstrapRun(runId, (summary) => this.toCompletedBootstrapSummary(summary));
+        await this.reconcileWorkerAutoscaling(`bootstrap-cancelled-before-capacity:${runId}`);
         return;
       }
       let workerTargets = await this.listWorkerTargets(true);
@@ -504,6 +512,7 @@ export class ControlPlaneService {
       if (this.bootstrapRuns.get(runId)?.cancelled) {
         await this.releaseRunLease(runId);
         this.updateBootstrapRun(runId, (summary) => this.toCompletedBootstrapSummary(summary));
+        await this.reconcileWorkerAutoscaling(`bootstrap-cancelled-after-capacity:${runId}`);
         return;
       }
 
@@ -564,6 +573,7 @@ export class ControlPlaneService {
           ].slice(0, 10)
         }));
       }
+      await this.reconcileWorkerAutoscaling(`bootstrap-failed:${runId}`);
     }
   }
 
@@ -652,6 +662,39 @@ export class ControlPlaneService {
       if (assignments.length > 0) {
         this.bootstrapRuns.delete(runId);
       }
+      await this.reconcileWorkerAutoscaling(`stop:${runId}`);
+    }
+  }
+
+  private async reconcileWorkerAutoscaling(context: string): Promise<void> {
+    if (!this.workerController.enabled) {
+      return;
+    }
+
+    const hasBootstrapActivity = Array.from(this.bootstrapRuns.values()).some(
+      (run) => !run.cancelled && run.summary.status === 'starting'
+    );
+    if (hasBootstrapActivity || this.stoppingRuns.size > 0) {
+      return;
+    }
+
+    const workerSources = await this.loadWorkerSources();
+    const hasLiveAssignments = workerSources.some((source) =>
+      source.assignments.some(
+        (assignment) => assignment.status === 'running' || assignment.status === 'paused'
+      )
+    );
+    if (hasLiveAssignments) {
+      return;
+    }
+
+    try {
+      await this.workerController.restoreAutoscaling();
+    } catch (error) {
+      console.warn(
+        `[control-plane] failed to restore worker autoscaling (${context}):`,
+        error instanceof Error ? error.message : error
+      );
     }
   }
 
