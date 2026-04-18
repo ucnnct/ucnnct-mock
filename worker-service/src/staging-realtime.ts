@@ -231,12 +231,14 @@ export class StagingRealtimeDriver {
     if (!cookieHeader) {
       throw new Error('Cannot open websocket without BFF session cookie');
     }
+    const accessToken = this.browserSessions.accessToken(sessionKey);
 
     return new Promise<RealtimeOutcome>((resolve, reject) => {
       let settled = false;
       const socket = new WebSocket(wsUrl, {
         headers: {
           Cookie: cookieHeader,
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
           Origin: httpBase.origin,
           'User-Agent': 'ucnnct-mock-worker/0.4 (+staging-ws)'
         },

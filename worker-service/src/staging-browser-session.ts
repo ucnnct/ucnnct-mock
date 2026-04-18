@@ -14,6 +14,7 @@ type BrowserSessionState = {
   authenticated: boolean;
   loginIdentity: AssignedMockUserIdentity | null;
   sessionStoreId: string | null;
+  accessToken: string | null;
   authFailureCount: number;
   authCooldownUntilMs: number;
   lastStatus: number | null;
@@ -59,6 +60,10 @@ export class StagingBrowserSessionManager {
     return this.getOrCreateSession(sessionKey).cookieJar.headerValue(urlLike);
   }
 
+  accessToken(sessionKey: string): string | null {
+    return this.getOrCreateSession(sessionKey).accessToken;
+  }
+
   async ensureAuthenticated(
     sessionKey: string,
     baseUrl: string,
@@ -86,6 +91,7 @@ export class StagingBrowserSessionManager {
           session.authenticated = false;
           session.cookieJar = new DomainCookieJar();
           session.sessionStoreId = null;
+          session.accessToken = null;
           session.authFailureCount += 1;
           session.authCooldownUntilMs = Date.now() + this.authenticationBackoffMs(session.authFailureCount);
           throw error;
@@ -214,6 +220,7 @@ export class StagingBrowserSessionManager {
     } catch (error) {
       failures += 1;
       session.authenticated = false;
+      session.accessToken = null;
       throw error;
     }
   }
@@ -242,6 +249,7 @@ export class StagingBrowserSessionManager {
       hostOnly: true
     });
     session.sessionStoreId = outcome.sessionId;
+    session.accessToken = outcome.accessToken;
     session.authenticated = true;
     session.authFailureCount = 0;
     session.authCooldownUntilMs = 0;
@@ -400,6 +408,7 @@ export class StagingBrowserSessionManager {
         authenticated: false,
         loginIdentity: null,
         sessionStoreId: null,
+        accessToken: null,
         authFailureCount: 0,
         authCooldownUntilMs: 0,
         lastStatus: null,

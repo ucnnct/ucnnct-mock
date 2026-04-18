@@ -6,6 +6,7 @@ type BootstrapOutcome = {
   sessionCookieValue: string;
   sessionId: string;
   userinfo: Record<string, unknown>;
+  accessToken: string;
 };
 
 type TokenResponse = {
@@ -119,7 +120,8 @@ export class StagingSessionBootstrapper {
     return {
       sessionCookieValue,
       sessionId,
-      userinfo
+      userinfo,
+      accessToken: tokenSet.access_token
     };
   }
 
