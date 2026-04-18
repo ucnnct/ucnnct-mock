@@ -1043,7 +1043,7 @@ export class WorkerEngine {
       return this.randomInt(120, Math.max(assignment.thinkTimeMinMs, 400));
     }
 
-    return this.randomInt(75, Math.max(240, Math.min(assignment.thinkTimeMinMs + 120, 420)));
+    return this.randomInt(1_500, Math.max(2_600, Math.min(assignment.thinkTimeMinMs + 2_200, 4_000)));
   }
 
   private followUpActionDelayMs(
@@ -1063,11 +1063,12 @@ export class WorkerEngine {
     if (!input.targetBaseUrl || input.virtualUsers <= 1) {
       return 0;
     }
-    void input;
-    void index;
-    // When gradual online is disabled, do not inject any artificial global
-    // staggering. The platform should see the real login pressure immediately.
-    return 0;
+
+    const totalUsers = Math.max(input.totalRunVirtualUsers ?? input.virtualUsers, 1);
+    const globalIndex = (input.globalUserOffset ?? 0) + index;
+    const activationWindowMs = Math.min(20_000, Math.max(6_000, Math.floor(totalUsers * 1.5)));
+
+    return Math.round((globalIndex / Math.max(totalUsers - 1, 1)) * activationWindowMs);
   }
 
   private isLiveActivationPhase(
