@@ -492,6 +492,10 @@ export class WorkerEngine {
       return user.bootstrapActions[0]!;
     }
 
+    if (assignment.targetBaseUrl && !user.connectedToWs) {
+      return 'open_home';
+    }
+
     if (assignment.gradualOnline && user.sessionDeadlineAtMs !== null && now >= user.sessionDeadlineAtMs) {
       return 'logout';
     }
