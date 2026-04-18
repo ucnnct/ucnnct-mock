@@ -3,6 +3,7 @@ import type { LiveTrafficStats } from './live-traffic.js';
 
 type StagingApiSessionState = {
   inflight: boolean;
+  pendingInput: StagingApiInput | null;
   loginIdentity: AssignedMockUserIdentity | null;
   accessToken: string | null;
   refreshToken: string | null;
@@ -149,6 +150,7 @@ export class StagingApiDriver {
     const session = this.getOrCreateSession(input.sessionKey);
     session.loginIdentity = input.identity;
     if (session.inflight) {
+      session.pendingInput = input;
       return;
     }
 
@@ -172,6 +174,11 @@ export class StagingApiDriver {
         const currentSession = this.sessions.get(input.sessionKey);
         if (currentSession) {
           currentSession.inflight = false;
+          const pendingInput = currentSession.pendingInput;
+          currentSession.pendingInput = null;
+          if (pendingInput) {
+            queueMicrotask(() => this.schedule(pendingInput));
+          }
         }
       });
   }
@@ -604,6 +611,7 @@ export class StagingApiDriver {
     if (!session) {
       session = {
         inflight: false,
+        pendingInput: null,
         loginIdentity: null,
         accessToken: null,
         refreshToken: null,

@@ -1,6 +1,7 @@
 type LiveSessionState = {
   cookieJar: CookieJar;
   inflight: boolean;
+  pendingInput: LiveTrafficInput | null;
   cachedShellAssetUrls: string[];
   lastShellAtMs: number;
   lastUserInfoAtMs: number;
@@ -78,6 +79,7 @@ export class LiveTrafficDriver {
 
     const session = this.getOrCreateSession(input.sessionKey);
     if (session.inflight) {
+      session.pendingInput = input;
       return;
     }
 
@@ -102,6 +104,11 @@ export class LiveTrafficDriver {
         const currentSession = this.sessions.get(input.sessionKey);
         if (currentSession) {
           currentSession.inflight = false;
+          const pendingInput = currentSession.pendingInput;
+          currentSession.pendingInput = null;
+          if (pendingInput) {
+            queueMicrotask(() => this.schedule(pendingInput));
+          }
         }
       });
   }
@@ -190,6 +197,7 @@ export class LiveTrafficDriver {
       session = {
         cookieJar: new CookieJar(),
         inflight: false,
+        pendingInput: null,
         cachedShellAssetUrls: [],
         lastShellAtMs: 0,
         lastUserInfoAtMs: 0,

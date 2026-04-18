@@ -25,6 +25,7 @@ type RealtimeSessionState = {
   cookieJar: DomainCookieJar;
   connectPromise: Promise<RealtimeOutcome> | null;
   inflight: boolean;
+  pendingInput: StagingRealtimeInput | null;
   ws: WebSocket | null;
   wsReady: boolean;
   currentPeerId: string | null;
@@ -90,6 +91,7 @@ export class StagingRealtimeDriver {
     }
 
     if (session.inflight) {
+      session.pendingInput = input;
       return;
     }
 
@@ -108,6 +110,11 @@ export class StagingRealtimeDriver {
         const current = this.sessions.get(input.sessionKey);
         if (current) {
           current.inflight = false;
+          const pendingInput = current.pendingInput;
+          current.pendingInput = null;
+          if (pendingInput) {
+            queueMicrotask(() => this.schedule(pendingInput));
+          }
         }
       });
   }
@@ -510,6 +517,7 @@ export class StagingRealtimeDriver {
         cookieJar: new DomainCookieJar(),
         connectPromise: null,
         inflight: false,
+        pendingInput: null,
         ws: null,
         wsReady: false,
         currentPeerId: null,
