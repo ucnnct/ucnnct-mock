@@ -638,7 +638,8 @@ export class WorkerEngine {
 
     switch (action) {
       case 'login': {
-        user.authenticated = true;
+        const liveAssignment = Boolean(assignment.targetBaseUrl);
+        user.authenticated = liveAssignment ? false : true;
         user.connectedToWs = false;
         user.currentPage = 'HOME';
         user.currentConversationId = null;
@@ -653,7 +654,9 @@ export class WorkerEngine {
         user.nextActionAtMs = now + this.postLoginDelayMs(assignment);
         this.scheduleLiveTraffic(assignment, user, action);
         return {
-          detail: `Logged in and requested realtime websocket bootstrap for a ${user.sessionObjective} session${assignment.targetBaseUrl ? ' using live staging traffic.' : '.'}`,
+          detail: liveAssignment
+            ? `Requested live login and realtime websocket bootstrap for a ${user.sessionObjective} session using staging traffic.`
+            : `Logged in and requested realtime websocket bootstrap for a ${user.sessionObjective} session.`,
           requestCost,
           messageCount: 0,
           uploadCount: 0,

@@ -12,6 +12,8 @@ type BrowserSessionState = {
   authPromise: Promise<BrowserAuthOutcome> | null;
   authenticated: boolean;
   loginIdentity: AssignedMockUserIdentity | null;
+  authFailureCount: number;
+  authCooldownUntilMs: number;
   lastStatus: number | null;
   lastActivityAtMs: number | null;
 };
@@ -32,6 +34,12 @@ type CookieRecord = {
 
 export class StagingBrowserSessionManager {
   private readonly sessions = new Map<string, BrowserSessionState>();
+  private readonly maxConcurrentAuthentications = Math.max(
+    1,
+    Number(process.env.BROWSER_AUTH_CONCURRENCY ?? 12)
+  );
+  private authenticationsInFlight = 0;
+  private readonly authenticationWaiters: Array<() => void> = [];
 
   isAuthenticated(sessionKey: string, baseUrl?: string): boolean {
     const session = this.sessions.get(sessionKey);
@@ -60,8 +68,25 @@ export class StagingBrowserSessionManager {
       return this.noop();
     }
 
+    if (session.authCooldownUntilMs > Date.now()) {
+      return this.noop();
+    }
+
     if (!session.authPromise) {
-      session.authPromise = this.performLogin(sessionKey, baseUrl, identity, session).finally(() => {
+      session.authPromise = this.withAuthenticationPermit(async () => {
+        try {
+          const outcome = await this.performLogin(sessionKey, baseUrl, identity, session);
+          session.authFailureCount = 0;
+          session.authCooldownUntilMs = 0;
+          return outcome;
+        } catch (error) {
+          session.authenticated = false;
+          session.cookieJar = new DomainCookieJar();
+          session.authFailureCount += 1;
+          session.authCooldownUntilMs = Date.now() + this.authenticationBackoffMs(session.authFailureCount);
+          throw error;
+        }
+      }).finally(() => {
         const current = this.sessions.get(sessionKey);
         if (current) {
           current.authPromise = null;
@@ -158,6 +183,8 @@ export class StagingBrowserSessionManager {
       }
 
       session.authenticated = true;
+      session.authFailureCount = 0;
+      session.authCooldownUntilMs = 0;
       return { requests, failures, lastStatus, lastActivityAtMs };
     } catch (error) {
       failures += 1;
@@ -277,6 +304,30 @@ export class StagingBrowserSessionManager {
     };
   }
 
+  private authenticationBackoffMs(failureCount: number): number {
+    const exponent = Math.max(0, Math.min(failureCount - 1, 5));
+    const baseDelayMs = 2_000 * 2 ** exponent;
+    const jitterMs = Math.floor(Math.random() * 1_000);
+    return Math.min(baseDelayMs + jitterMs, 30_000);
+  }
+
+  private async withAuthenticationPermit<T>(task: () => Promise<T>): Promise<T> {
+    if (this.authenticationsInFlight >= this.maxConcurrentAuthentications) {
+      await new Promise<void>((resolve) => {
+        this.authenticationWaiters.push(resolve);
+      });
+    }
+
+    this.authenticationsInFlight += 1;
+    try {
+      return await task();
+    } finally {
+      this.authenticationsInFlight = Math.max(0, this.authenticationsInFlight - 1);
+      const next = this.authenticationWaiters.shift();
+      next?.();
+    }
+  }
+
   private getOrCreateSession(sessionKey: string): BrowserSessionState {
     let session = this.sessions.get(sessionKey);
     if (!session) {
@@ -285,6 +336,8 @@ export class StagingBrowserSessionManager {
         authPromise: null,
         authenticated: false,
         loginIdentity: null,
+        authFailureCount: 0,
+        authCooldownUntilMs: 0,
         lastStatus: null,
         lastActivityAtMs: null
       };
