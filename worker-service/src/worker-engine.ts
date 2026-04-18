@@ -347,7 +347,7 @@ export class WorkerEngine {
 
     return users.map((user) => {
       const sessionKey = this.liveSessionKey(assignment.id, user.id);
-      const authenticated = user.authenticated && this.stagingApi.hasAuthenticatedSession(sessionKey);
+      const authenticated = user.authenticated || this.stagingApi.hasAuthenticatedSession(sessionKey);
       const connectedToWs = authenticated && this.stagingRealtime.isReady(sessionKey);
       if (authenticated === user.authenticated && connectedToWs === user.connectedToWs) {
         return user;
