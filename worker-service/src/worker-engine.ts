@@ -488,6 +488,9 @@ export class WorkerEngine {
     now: number
   ): UserAction {
     if (!user.authenticated) {
+      if (assignment.targetBaseUrl && user.sessionStartedAtMs !== null) {
+        return 'open_home';
+      }
       return 'login';
     }
 
