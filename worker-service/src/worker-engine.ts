@@ -255,7 +255,8 @@ export class WorkerEngine {
     const tickLatency: number[] = [];
     const tickFailures: number[] = [];
 
-    const users = assignment.users.map((user) => {
+    const currentUsers = this.reconcileLiveState(assignment, assignment.users);
+    const users = currentUsers.map((user) => {
       if (elapsedMs < user.activationOffsetMs || now < user.nextActionAtMs) {
         return user;
       }
