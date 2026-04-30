@@ -1027,17 +1027,18 @@ export class WorkerEngine {
 
   private pickObjective(assignment: WorkerAssignmentRuntime): SessionObjective {
     const mediaWeight = assignment.weights.media * (0.45 + assignment.media.uploadProbability * 1.8);
-
-    return this.pickWeighted<SessionObjective>([
+    const choices = ([
       {
         action: 'browse',
-        weight: Math.max(0.2, assignment.weights.browse + assignment.weights.notificationCheck * 0.35)
+        weight: assignment.weights.browse + assignment.weights.notificationCheck * 0.35
       },
-      { action: 'reply_messages', weight: Math.max(0.2, assignment.weights.privateMessage) },
-      { action: 'socialize', weight: Math.max(0.2, assignment.weights.social) },
-      { action: 'group_activity', weight: Math.max(0.2, assignment.weights.group) },
-      { action: 'share_file', weight: Math.max(0.2, mediaWeight) }
-    ]);
+      { action: 'reply_messages', weight: assignment.weights.privateMessage },
+      { action: 'socialize', weight: assignment.weights.social },
+      { action: 'group_activity', weight: assignment.weights.group },
+      { action: 'share_file', weight: mediaWeight }
+    ] satisfies Array<{ action: SessionObjective; weight: number }>).filter((choice) => choice.weight > 0);
+
+    return choices.length > 0 ? this.pickWeighted(choices) : 'browse';
   }
 
   private pickObjectiveDirectedAction(
