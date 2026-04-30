@@ -139,8 +139,13 @@ export interface WorkerNode {
   status: 'healthy' | 'warming' | 'saturated';
   assignedUsers: number;
   runningWorkers: number;
+  metricsSource: 'cluster' | 'estimated';
   cpuPercent: number;
+  cpuUsageMillicores: number;
+  cpuAllocatableMillicores: number;
   memoryPercent: number;
+  memoryUsageMi: number;
+  memoryAllocatableMi: number;
   queueLagMs: number;
   podCount: number;
   zone: string;

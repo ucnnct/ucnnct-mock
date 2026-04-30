@@ -5,7 +5,7 @@
       <h2>Real replica movement, HPA posture and autoscaled worker pressure</h2>
       <p class="muted">
         This view now reads real Kubernetes data from the staging cluster for service replicas, HPA posture and pod
-        CPU and memory usage. Worker pressure still comes from the mock execution plane.
+        CPU and memory usage. Worker node CPU and memory now come from the mock cluster itself when metrics are available.
       </p>
     </div>
   </article>
@@ -148,6 +148,32 @@
             <span>{{ node.runningWorkers }} running workers</span>
             <span>{{ node.podCount }} pods</span>
             <span>{{ node.queueLagMs }} ms queue lag</span>
+          </div>
+
+          <div class="meter">
+            <div class="meter-label">
+              <span>CPU node usage</span>
+              <strong>{{ node.cpuPercent }}%</strong>
+            </div>
+            <div class="meter-track">
+              <div class="meter-fill" [style.width.%]="node.cpuPercent"></div>
+            </div>
+          </div>
+
+          <div class="meter">
+            <div class="meter-label">
+              <span>Memory node usage</span>
+              <strong>{{ node.memoryPercent }}%</strong>
+            </div>
+            <div class="meter-track meter-track--memory">
+              <div class="meter-fill meter-fill--memory" [style.width.%]="node.memoryPercent"></div>
+            </div>
+          </div>
+
+          <div class="service-bottomline">
+            <span>{{ node.cpuUsageMillicores }}m / {{ node.cpuAllocatableMillicores }}m CPU</span>
+            <span>{{ node.memoryUsageMi }}Mi / {{ node.memoryAllocatableMi }}Mi RAM</span>
+            <span>{{ node.metricsSource === 'cluster' ? 'mock cluster metrics' : 'fallback estimate' }}</span>
           </div>
         </article>
       </div>

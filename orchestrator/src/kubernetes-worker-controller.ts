@@ -30,6 +30,38 @@ type PodListResponse = {
   }>;
 };
 
+type NodeListResponse = {
+  items?: Array<{
+    metadata?: {
+      name?: string;
+      labels?: Record<string, string>;
+    };
+    status?: {
+      allocatable?: Record<string, string>;
+    };
+  }>;
+};
+
+type NodeMetricsListResponse = {
+  items?: Array<{
+    metadata?: {
+      name?: string;
+    };
+    usage?: Record<string, string>;
+  }>;
+};
+
+export type WorkerNodeMetric = {
+  name: string;
+  zone: string;
+  cpuUsageMillicores: number;
+  cpuAllocatableMillicores: number;
+  memoryUsageMi: number;
+  memoryAllocatableMi: number;
+  cpuPercent: number;
+  memoryPercent: number;
+};
+
 export class KubernetesWorkerController {
   readonly namespace = process.env.K8S_NAMESPACE ?? 'ucnnct-mock';
   readonly deploymentName = process.env.WORKER_DEPLOYMENT_NAME ?? 'worker-service';
@@ -123,6 +155,69 @@ export class KubernetesWorkerController {
         'Content-Type': 'application/merge-patch+json'
       }
     );
+  }
+
+  async listWorkerNodeMetrics(): Promise<WorkerNodeMetric[]> {
+    if (!this.enabled) {
+      return [];
+    }
+
+    const [nodesPayload, metricsPayload] = await Promise.all([
+      this.requestJson<NodeListResponse>('GET', '/api/v1/nodes'),
+      this.requestJson<NodeMetricsListResponse>('GET', '/apis/metrics.k8s.io/v1beta1/nodes')
+    ]);
+
+    const usageByNode = new Map(
+      (metricsPayload.items ?? [])
+        .map((item) => {
+          const name = item.metadata?.name ?? '';
+          if (!name) {
+            return null;
+          }
+          return [
+            name,
+            {
+              cpuUsageMillicores: this.parseCpuToMillicores(item.usage?.cpu),
+              memoryUsageMi: this.parseMemoryToMi(item.usage?.memory)
+            }
+          ] as const;
+        })
+        .filter((entry): entry is readonly [string, { cpuUsageMillicores: number; memoryUsageMi: number }] => entry !== null)
+    );
+
+    return (nodesPayload.items ?? [])
+      .map((item) => {
+        const name = item.metadata?.name ?? '';
+        if (!name) {
+          return null;
+        }
+
+        const zone = item.metadata?.labels?.['topology.kubernetes.io/zone'] ?? name;
+        const cpuAllocatableMillicores = this.parseCpuToMillicores(item.status?.allocatable?.cpu);
+        const memoryAllocatableMi = this.parseMemoryToMi(item.status?.allocatable?.memory);
+        const usage = usageByNode.get(name);
+        const cpuUsageMillicores = usage?.cpuUsageMillicores ?? 0;
+        const memoryUsageMi = usage?.memoryUsageMi ?? 0;
+        const cpuPercent =
+          cpuAllocatableMillicores > 0
+            ? Math.round((cpuUsageMillicores / cpuAllocatableMillicores) * 100)
+            : 0;
+        const memoryPercent =
+          memoryAllocatableMi > 0 ? Math.round((memoryUsageMi / memoryAllocatableMi) * 100) : 0;
+
+        return {
+          name,
+          zone,
+          cpuUsageMillicores,
+          cpuAllocatableMillicores,
+          memoryUsageMi,
+          memoryAllocatableMi,
+          cpuPercent,
+          memoryPercent
+        } satisfies WorkerNodeMetric;
+      })
+      .filter((item): item is WorkerNodeMetric => item !== null)
+      .sort((left, right) => left.name.localeCompare(right.name));
   }
 
   async prepareWorkerCapacity(targetReplicas: number): Promise<number> {
@@ -260,5 +355,51 @@ export class KubernetesWorkerController {
 
   private clamp(value: number, min: number, max: number): number {
     return Math.min(Math.max(value, min), max);
+  }
+
+  private parseCpuToMillicores(value: string | undefined): number {
+    if (!value) {
+      return 0;
+    }
+
+    if (value.endsWith('n')) {
+      return Math.round(Number.parseFloat(value.slice(0, -1)) / 1_000_000);
+    }
+    if (value.endsWith('u')) {
+      return Math.round(Number.parseFloat(value.slice(0, -1)) / 1_000);
+    }
+    if (value.endsWith('m')) {
+      return Math.round(Number.parseFloat(value.slice(0, -1)));
+    }
+
+    return Math.round(Number.parseFloat(value) * 1000);
+  }
+
+  private parseMemoryToMi(value: string | undefined): number {
+    if (!value) {
+      return 0;
+    }
+
+    const match = /^([0-9]+(?:\.[0-9]+)?)([A-Za-z]+)?$/.exec(value);
+    if (!match) {
+      return 0;
+    }
+
+    const amount = Number.parseFloat(match[1] ?? '0');
+    const unit = match[2] ?? '';
+    const factors: Record<string, number> = {
+      Ki: 1 / 1024,
+      Mi: 1,
+      Gi: 1024,
+      Ti: 1024 * 1024,
+      Pi: 1024 * 1024 * 1024,
+      Ei: 1024 * 1024 * 1024 * 1024,
+      K: 1000 / (1024 * 1024),
+      M: 1000 * 1000 / (1024 * 1024),
+      G: 1000 * 1000 * 1000 / (1024 * 1024),
+      T: 1000 * 1000 * 1000 * 1000 / (1024 * 1024)
+    };
+
+    return Math.round(amount * (factors[unit] ?? 1 / (1024 * 1024)));
   }
 }

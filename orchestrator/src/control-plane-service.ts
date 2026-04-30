@@ -16,7 +16,11 @@ import {
   ServiceScaling,
   WorkerNode
 } from './models.js';
-import { KubernetesWorkerController, WorkerPodTarget } from './kubernetes-worker-controller.js';
+import {
+  KubernetesWorkerController,
+  WorkerNodeMetric,
+  WorkerPodTarget
+} from './kubernetes-worker-controller.js';
 import {
   StagingClusterReader,
   StagingServiceDefinition
@@ -322,7 +326,7 @@ export class ControlPlaneService {
     const runs = Array.from(runMap.values()).sort((left, right) => right.startedAt.localeCompare(left.startedAt));
 
     const services = await this.buildServices(runs);
-    const workerNodes = this.buildWorkerNodes(workerSources);
+    const workerNodes = await this.buildWorkerNodes(workerSources);
     const dashboard = this.buildDashboard(runs, services, workerSources, workerNodes);
 
     if (
@@ -1428,12 +1432,26 @@ export class ControlPlaneService {
     });
   }
 
-  private buildWorkerNodes(workerSources: WorkerSource[]): WorkerNode[] {
+  private async buildWorkerNodes(workerSources: WorkerSource[]): Promise<WorkerNode[]> {
     const grouped = new Map<string, WorkerSource[]>();
     for (const source of workerSources) {
       const bucket = grouped.get(source.target.nodeName) ?? [];
       bucket.push(source);
       grouped.set(source.target.nodeName, bucket);
+    }
+
+    const metricsByNode = new Map<string, WorkerNodeMetric>();
+    if (this.workerController.enabled) {
+      try {
+        for (const metric of await this.workerController.listWorkerNodeMetrics()) {
+          metricsByNode.set(metric.name, metric);
+        }
+      } catch (error) {
+        console.warn(
+          '[control-plane] unable to load worker node metrics:',
+          error instanceof Error ? error.message : error
+        );
+      }
     }
 
     return Array.from(grouped.entries()).map(([nodeName, sources], index) => {
@@ -1442,8 +1460,19 @@ export class ControlPlaneService {
       const podCount = sources.length;
       const requestsPerSecond = sources.reduce((sum, source) => sum + source.runtime.requestsPerSecond, 0);
       const messagesPerSecond = sources.reduce((sum, source) => sum + source.runtime.messagesPerSecond, 0);
-      const cpuPercent = Math.round(this.clamp(6 + runningWorkers * 12 + assignedUsers * 0.05 + requestsPerSecond * 0.08 + messagesPerSecond * 0.6, 4, 96));
-      const memoryPercent = Math.round(this.clamp(12 + podCount * 8 + runningWorkers * 9 + assignedUsers * 0.03, 10, 94));
+      const metric = metricsByNode.get(nodeName);
+      const cpuPercent = metric
+        ? Math.round(this.clamp(metric.cpuPercent, 0, 100))
+        : Math.round(
+            this.clamp(
+              6 + runningWorkers * 12 + assignedUsers * 0.05 + requestsPerSecond * 0.08 + messagesPerSecond * 0.6,
+              4,
+              96
+            )
+          );
+      const memoryPercent = metric
+        ? Math.round(this.clamp(metric.memoryPercent, 0, 100))
+        : Math.round(this.clamp(12 + podCount * 8 + runningWorkers * 9 + assignedUsers * 0.03, 10, 94));
       const status: WorkerNode['status'] =
         cpuPercent > 84 || memoryPercent > 84 ? 'saturated' : cpuPercent > 58 ? 'warming' : 'healthy';
 
@@ -1453,8 +1482,13 @@ export class ControlPlaneService {
         status,
         assignedUsers,
         runningWorkers,
+        metricsSource: metric ? ('cluster' as const) : ('estimated' as const),
         cpuPercent,
+        cpuUsageMillicores: metric?.cpuUsageMillicores ?? 0,
+        cpuAllocatableMillicores: metric?.cpuAllocatableMillicores ?? 0,
         memoryPercent,
+        memoryUsageMi: metric?.memoryUsageMi ?? 0,
+        memoryAllocatableMi: metric?.memoryAllocatableMi ?? 0,
         queueLagMs: Math.round(this.clamp(20 + assignedUsers * 0.35 + runningWorkers * 35, 18, 2400)),
         podCount,
         zone: sources[0]?.target.zone ?? nodeName
