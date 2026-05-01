@@ -7,6 +7,7 @@ type BootstrapOutcome = {
   sessionId: string;
   userinfo: Record<string, unknown>;
   accessToken: string;
+  accessTokenExpiresAtMs: number | null;
 };
 
 type TokenResponse = {
@@ -122,7 +123,11 @@ export class StagingSessionBootstrapper {
       sessionCookieValue,
       sessionId,
       userinfo,
-      accessToken: tokenSet.access_token
+      accessToken: tokenSet.access_token,
+      accessTokenExpiresAtMs:
+        typeof tokenSet.expires_at === 'number' && tokenSet.expires_at > 0
+          ? tokenSet.expires_at * 1000
+          : null
     };
   }
 

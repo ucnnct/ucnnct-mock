@@ -15,6 +15,7 @@ type BrowserSessionState = {
   loginIdentity: AssignedMockUserIdentity | null;
   sessionStoreId: string | null;
   accessToken: string | null;
+  accessTokenExpiresAtMs: number | null;
   authFailureCount: number;
   authCooldownUntilMs: number;
   lastStatus: number | null;
@@ -72,7 +73,7 @@ export class StagingBrowserSessionManager {
     const session = this.getOrCreateSession(sessionKey);
     session.loginIdentity = identity;
 
-    if (this.isAuthenticated(sessionKey, baseUrl)) {
+    if (this.isAuthenticated(sessionKey, baseUrl) && !this.isAccessTokenExpiring(session)) {
       return this.noop();
     }
 
@@ -92,6 +93,7 @@ export class StagingBrowserSessionManager {
           session.cookieJar = new DomainCookieJar();
           session.sessionStoreId = null;
           session.accessToken = null;
+          session.accessTokenExpiresAtMs = null;
           session.authFailureCount += 1;
           session.authCooldownUntilMs = Date.now() + this.authenticationBackoffMs(session.authFailureCount);
           throw error;
@@ -193,6 +195,7 @@ export class StagingBrowserSessionManager {
       }
 
       session.authenticated = true;
+      session.accessTokenExpiresAtMs = null;
       session.authFailureCount = 0;
       session.authCooldownUntilMs = 0;
 
@@ -221,6 +224,7 @@ export class StagingBrowserSessionManager {
       failures += 1;
       session.authenticated = false;
       session.accessToken = null;
+      session.accessTokenExpiresAtMs = null;
       throw error;
     }
   }
@@ -250,6 +254,7 @@ export class StagingBrowserSessionManager {
     });
     session.sessionStoreId = outcome.sessionId;
     session.accessToken = outcome.accessToken;
+    session.accessTokenExpiresAtMs = outcome.accessTokenExpiresAtMs;
     session.authenticated = true;
     session.authFailureCount = 0;
     session.authCooldownUntilMs = 0;
@@ -382,6 +387,14 @@ export class StagingBrowserSessionManager {
     return Math.min(baseDelayMs + jitterMs, 10_000);
   }
 
+  private isAccessTokenExpiring(session: BrowserSessionState): boolean {
+    if (!session.accessToken || session.accessTokenExpiresAtMs === null) {
+      return false;
+    }
+
+    return session.accessTokenExpiresAtMs <= Date.now() + 60_000;
+  }
+
   private async withAuthenticationPermit<T>(task: () => Promise<T>): Promise<T> {
     if (this.authenticationsInFlight >= this.maxConcurrentAuthentications) {
       await new Promise<void>((resolve) => {
@@ -409,6 +422,7 @@ export class StagingBrowserSessionManager {
         loginIdentity: null,
         sessionStoreId: null,
         accessToken: null,
+        accessTokenExpiresAtMs: null,
         authFailureCount: 0,
         authCooldownUntilMs: 0,
         lastStatus: null,
