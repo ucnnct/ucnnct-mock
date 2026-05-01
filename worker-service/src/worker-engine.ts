@@ -81,6 +81,10 @@ type ActionOutcome = {
   failed: boolean;
 };
 
+type LiveTrafficScheduleOptions = {
+  realtimeOnly?: boolean;
+};
+
 export class WorkerEngine {
   private assignments: WorkerAssignmentRuntime[] = [];
   private readonly browserSessions = new StagingBrowserSessionManager();
@@ -686,12 +690,13 @@ export class WorkerEngine {
       case 'open_home':
         user.currentPage = 'HOME';
         if (this.isSocketHoldAssignment(assignment) && user.connectedToWs) {
+          this.scheduleLiveTraffic(assignment, user, action, { realtimeOnly: true });
           user.nextActionAtMs = now + this.socketHoldIdleDelayMs(assignment);
           return this.outcome(
             action,
             0,
             0,
-            'Kept the authenticated websocket session open without extra HTTP traffic.'
+            'Kept the authenticated websocket session alive without extra HTTP traffic.'
           );
         }
         this.scheduleLiveTraffic(assignment, user, action);
@@ -1054,9 +1059,9 @@ export class WorkerEngine {
     return Boolean(assignment.targetBaseUrl) && Object.values(assignment.weights).every((weight) => weight <= 0);
   }
 
-  private socketHoldIdleDelayMs(assignment: Pick<WorkerAssignmentRuntime, 'thinkTimeMinMs' | 'thinkTimeMaxMs'>): number {
-    const lower = Math.max(10_000, assignment.thinkTimeMinMs);
-    const upper = Math.max(lower, assignment.thinkTimeMaxMs, 30_000);
+  private socketHoldIdleDelayMs(_assignment: Pick<WorkerAssignmentRuntime, 'thinkTimeMinMs' | 'thinkTimeMaxMs'>): number {
+    const lower = 10_000;
+    const upper = 20_000;
     return this.randomInt(lower, upper);
   }
 
@@ -1357,7 +1362,8 @@ export class WorkerEngine {
   private scheduleLiveTraffic(
     assignment: Pick<WorkerAssignmentRuntime, 'id' | 'targetBaseUrl' | 'assignedUsers'>,
     user: Pick<VirtualUserState, 'id' | 'connectedToWs' | 'identity'>,
-    action: UserAction
+    action: UserAction,
+    options: LiveTrafficScheduleOptions = {}
   ): void {
     if (!assignment.targetBaseUrl) {
       return;
@@ -1382,7 +1388,7 @@ export class WorkerEngine {
     const shouldForceRealtimeBootstrap = !user.connectedToWs;
     const bootstrapOnly = shouldForceRealtimeBootstrap && action !== 'login';
 
-    if (!bootstrapOnly) {
+    if (!bootstrapOnly && !options.realtimeOnly) {
       this.liveTraffic.schedule({
         sessionKey,
         baseUrl: assignment.targetBaseUrl,
@@ -1390,6 +1396,11 @@ export class WorkerEngine {
         connectedToWs: user.connectedToWs,
         identity: user.identity
       });
+    }
+
+    if (options.realtimeOnly) {
+      this.stagingRealtime.schedule(realtimeInput);
+      return;
     }
 
     switch (action) {
