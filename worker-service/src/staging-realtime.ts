@@ -30,6 +30,8 @@ type RealtimeSessionState = {
   lastInput: StagingRealtimeInput | null;
   reconnectTimer: NodeJS.Timeout | null;
   heartbeatTimer: NodeJS.Timeout | null;
+  holdKeepaliveTimer: NodeJS.Timeout | null;
+  holdOnly: boolean;
   ws: WebSocket | null;
   wsReady: boolean;
   currentPeerId: string | null;
@@ -83,6 +85,9 @@ export class StagingRealtimeDriver {
     if (session?.heartbeatTimer) {
       clearInterval(session.heartbeatTimer);
     }
+    if (session?.holdKeepaliveTimer) {
+      clearTimeout(session.holdKeepaliveTimer);
+    }
 
     this.sessions.delete(sessionKey);
     this.stats.delete(sessionKey);
@@ -100,6 +105,7 @@ export class StagingRealtimeDriver {
     const session = this.getOrCreateSession(input.sessionKey);
     session.loginIdentity = input.identity;
     session.lastInput = input;
+    session.holdOnly = Boolean(input.holdOnly);
 
     if (input.action === 'logout') {
       this.forget(input.sessionKey);
@@ -150,8 +156,10 @@ export class StagingRealtimeDriver {
       session
     );
     if (input.holdOnly) {
+      this.startHoldKeepalive(input.sessionKey, session, session.ws);
       return bootstrap;
     }
+    this.clearHoldKeepalive(session);
     const action = await this.handleAction(input, session);
     return this.combine(bootstrap, action);
   }
@@ -221,6 +229,7 @@ export class StagingRealtimeDriver {
     baseUrl: string
   ): Promise<RealtimeOutcome> {
     this.clearHeartbeat(session);
+    this.clearHoldKeepalive(session);
     if (session.ws) {
       session.ws.removeAllListeners();
       try {
@@ -251,7 +260,8 @@ export class StagingRealtimeDriver {
           Origin: httpBase.origin,
           'User-Agent': 'ucnnct-mock-worker/0.4 (+staging-ws)'
         },
-        handshakeTimeout: 20_000
+        handshakeTimeout: 20_000,
+        perMessageDeflate: false
       });
 
       const timeout = setTimeout(() => {
@@ -273,8 +283,12 @@ export class StagingRealtimeDriver {
         session.wsReady = true;
         session.lastStatus = 101;
         session.lastActivityAtMs = Date.now();
+        this.enableTcpKeepAlive(socket);
         this.attachSocketListeners(sessionKey, session, socket);
         this.startHeartbeat(session, socket);
+        if (session.holdOnly) {
+          this.startHoldKeepalive(sessionKey, session, socket);
+        }
         resolve({
           requests: 1,
           failures: 0,
@@ -367,6 +381,7 @@ export class StagingRealtimeDriver {
         );
       }
       this.clearHeartbeat(session);
+      this.clearHoldKeepalive(session);
       session.wsReady = false;
       session.ws = null;
       this.scheduleReconnect(sessionKey, session, 1_000);
@@ -380,9 +395,26 @@ export class StagingRealtimeDriver {
         `[staging-realtime] websocket error sessionKey=${sessionKey} err=${error instanceof Error ? error.message : String(error)}`
       );
       this.clearHeartbeat(session);
+      this.clearHoldKeepalive(session);
       session.wsReady = false;
       this.scheduleReconnect(sessionKey, session, 1_000);
     });
+  }
+
+  private enableTcpKeepAlive(socket: WebSocket): void {
+    const tcpKeepAliveInitialDelayMs = Math.max(
+      10_000,
+      Number(process.env.WS_CLIENT_TCP_KEEPALIVE_INITIAL_DELAY_MS ?? 30_000)
+    );
+    const rawSocket = (socket as unknown as {
+      _socket?: { setKeepAlive?: (enabled: boolean, initialDelay?: number) => void };
+    })._socket;
+
+    try {
+      rawSocket?.setKeepAlive?.(true, tcpKeepAliveInitialDelayMs);
+    } catch {
+      // TCP keepalive is best-effort; websocket heartbeats still cover the session.
+    }
   }
 
   private startHeartbeat(session: RealtimeSessionState, socket: WebSocket): void {
@@ -410,6 +442,56 @@ export class StagingRealtimeDriver {
     }
     clearInterval(session.heartbeatTimer);
     session.heartbeatTimer = null;
+  }
+
+  private startHoldKeepalive(
+    sessionKey: string,
+    session: RealtimeSessionState,
+    socket: WebSocket | null
+  ): void {
+    this.clearHoldKeepalive(session);
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    const intervalMs = Math.max(60_000, Number(process.env.WS_HOLD_KEEPALIVE_INTERVAL_MS ?? 180_000));
+    const jitterMs = Math.min(60_000, Math.floor(intervalMs * 0.25));
+    const scheduleNext = () => {
+      const delayMs = intervalMs + Math.floor(Math.random() * Math.max(jitterMs, 1));
+      session.holdKeepaliveTimer = setTimeout(() => {
+        if (session.ws !== socket || socket.readyState !== WebSocket.OPEN) {
+          this.clearHoldKeepalive(session);
+          return;
+        }
+
+        void this.sendActiveContext(session, '/', null)
+          .then((outcome) => this.mergeStats(sessionKey, outcome))
+          .catch((error) => {
+            console.warn(
+              `[staging-realtime] hold keepalive failed sessionKey=${sessionKey} err=${
+                error instanceof Error ? error.message : String(error)
+              }`
+            );
+            socket.terminate();
+          })
+          .finally(() => {
+            if (session.ws === socket && socket.readyState === WebSocket.OPEN) {
+              scheduleNext();
+            }
+          });
+      }, delayMs);
+      session.holdKeepaliveTimer.unref?.();
+    };
+
+    scheduleNext();
+  }
+
+  private clearHoldKeepalive(session: RealtimeSessionState): void {
+    if (!session.holdKeepaliveTimer) {
+      return;
+    }
+    clearTimeout(session.holdKeepaliveTimer);
+    session.holdKeepaliveTimer = null;
   }
 
   private async handleAction(
@@ -534,7 +616,16 @@ export class StagingRealtimeDriver {
       };
     }
 
-    session.ws.send(JSON.stringify(packet));
+    try {
+      session.ws.send(JSON.stringify(packet));
+    } catch {
+      return {
+        requests: 1,
+        failures: 1,
+        lastStatus: 503,
+        lastActivityAtMs: Date.now()
+      };
+    }
     const at = Date.now();
     session.lastStatus = 200;
     session.lastActivityAtMs = at;
@@ -567,6 +658,8 @@ export class StagingRealtimeDriver {
         lastInput: null,
         reconnectTimer: null,
         heartbeatTimer: null,
+        holdKeepaliveTimer: null,
+        holdOnly: false,
         ws: null,
         wsReady: false,
         currentPeerId: null,
