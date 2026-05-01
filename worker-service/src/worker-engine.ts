@@ -685,6 +685,15 @@ export class WorkerEngine {
       }
       case 'open_home':
         user.currentPage = 'HOME';
+        if (this.isSocketHoldAssignment(assignment) && user.connectedToWs) {
+          user.nextActionAtMs = now + this.socketHoldIdleDelayMs(assignment);
+          return this.outcome(
+            action,
+            0,
+            0,
+            'Kept the authenticated websocket session open without extra HTTP traffic.'
+          );
+        }
         this.scheduleLiveTraffic(assignment, user, action);
         return this.outcome(action, requestCost, latencyMs, 'Navigated back to the home feed.');
       case 'fetch_notifications':
@@ -1039,6 +1048,16 @@ export class WorkerEngine {
     ] satisfies Array<{ action: SessionObjective; weight: number }>).filter((choice) => choice.weight > 0);
 
     return choices.length > 0 ? this.pickWeighted(choices) : 'browse';
+  }
+
+  private isSocketHoldAssignment(assignment: Pick<WorkerAssignmentRuntime, 'targetBaseUrl' | 'weights'>): boolean {
+    return Boolean(assignment.targetBaseUrl) && Object.values(assignment.weights).every((weight) => weight <= 0);
+  }
+
+  private socketHoldIdleDelayMs(assignment: Pick<WorkerAssignmentRuntime, 'thinkTimeMinMs' | 'thinkTimeMaxMs'>): number {
+    const lower = Math.max(10_000, assignment.thinkTimeMinMs);
+    const upper = Math.max(lower, assignment.thinkTimeMaxMs, 30_000);
+    return this.randomInt(lower, upper);
   }
 
   private pickObjectiveDirectedAction(
