@@ -691,13 +691,12 @@ export class WorkerEngine {
       case 'open_home':
         user.currentPage = 'HOME';
         if (this.isSocketHoldAssignment(assignment) && user.connectedToWs) {
-          this.scheduleLiveTraffic(assignment, user, action, { realtimeOnly: true });
           user.nextActionAtMs = now + this.socketHoldIdleDelayMs(assignment);
           return this.outcome(
             action,
             0,
             0,
-            'Kept the authenticated websocket session alive without extra HTTP traffic.'
+            'Observed the authenticated websocket session while heartbeat pings keep it alive.'
           );
         }
         this.scheduleLiveTraffic(assignment, user, action);
@@ -1061,8 +1060,8 @@ export class WorkerEngine {
   }
 
   private socketHoldIdleDelayMs(_assignment: Pick<WorkerAssignmentRuntime, 'thinkTimeMinMs' | 'thinkTimeMaxMs'>): number {
-    const lower = 12_000;
-    const upper = 18_000;
+    const lower = 45_000;
+    const upper = 75_000;
     return this.randomInt(lower, upper);
   }
 
