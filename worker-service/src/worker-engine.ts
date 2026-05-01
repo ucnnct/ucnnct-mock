@@ -1061,8 +1061,8 @@ export class WorkerEngine {
   }
 
   private socketHoldIdleDelayMs(_assignment: Pick<WorkerAssignmentRuntime, 'thinkTimeMinMs' | 'thinkTimeMaxMs'>): number {
-    const lower = 20_000;
-    const upper = 30_000;
+    const lower = 12_000;
+    const upper = 18_000;
     return this.randomInt(lower, upper);
   }
 

@@ -28,6 +28,7 @@ type RealtimeSessionState = {
   pendingInput: StagingRealtimeInput | null;
   lastInput: StagingRealtimeInput | null;
   reconnectTimer: NodeJS.Timeout | null;
+  heartbeatTimer: NodeJS.Timeout | null;
   ws: WebSocket | null;
   wsReady: boolean;
   currentPeerId: string | null;
@@ -77,6 +78,9 @@ export class StagingRealtimeDriver {
     }
     if (session?.reconnectTimer) {
       clearTimeout(session.reconnectTimer);
+    }
+    if (session?.heartbeatTimer) {
+      clearInterval(session.heartbeatTimer);
     }
 
     this.sessions.delete(sessionKey);
@@ -212,6 +216,7 @@ export class StagingRealtimeDriver {
     session: RealtimeSessionState,
     baseUrl: string
   ): Promise<RealtimeOutcome> {
+    this.clearHeartbeat(session);
     if (session.ws) {
       session.ws.removeAllListeners();
       try {
@@ -265,6 +270,7 @@ export class StagingRealtimeDriver {
         session.lastStatus = 101;
         session.lastActivityAtMs = Date.now();
         this.attachSocketListeners(sessionKey, session, socket);
+        this.startHeartbeat(session, socket);
         resolve({
           requests: 1,
           failures: 0,
@@ -348,15 +354,50 @@ export class StagingRealtimeDriver {
     });
 
     socket.on('close', () => {
+      if (session.ws !== socket) {
+        return;
+      }
+      this.clearHeartbeat(session);
       session.wsReady = false;
       session.ws = null;
       this.scheduleReconnect(sessionKey, session, 1_000);
     });
 
     socket.on('error', () => {
+      if (session.ws !== socket) {
+        return;
+      }
+      this.clearHeartbeat(session);
       session.wsReady = false;
       this.scheduleReconnect(sessionKey, session, 1_000);
     });
+  }
+
+  private startHeartbeat(session: RealtimeSessionState, socket: WebSocket): void {
+    this.clearHeartbeat(session);
+    const intervalMs = Math.max(5_000, Number(process.env.WS_CLIENT_PING_INTERVAL_MS ?? 15_000));
+    session.heartbeatTimer = setInterval(() => {
+      if (session.ws !== socket || socket.readyState !== WebSocket.OPEN) {
+        this.clearHeartbeat(session);
+        return;
+      }
+
+      try {
+        socket.ping();
+        session.lastActivityAtMs = Date.now();
+      } catch {
+        socket.terminate();
+      }
+    }, intervalMs);
+    session.heartbeatTimer.unref?.();
+  }
+
+  private clearHeartbeat(session: RealtimeSessionState): void {
+    if (!session.heartbeatTimer) {
+      return;
+    }
+    clearInterval(session.heartbeatTimer);
+    session.heartbeatTimer = null;
   }
 
   private async handleAction(
@@ -513,6 +554,7 @@ export class StagingRealtimeDriver {
         pendingInput: null,
         lastInput: null,
         reconnectTimer: null,
+        heartbeatTimer: null,
         ws: null,
         wsReady: false,
         currentPeerId: null,
