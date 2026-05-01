@@ -44,6 +44,9 @@ type RealtimeSessionState = {
 export class StagingRealtimeDriver {
   private readonly sessions = new Map<string, RealtimeSessionState>();
   private readonly stats = new Map<string, LiveTrafficStats>();
+  private readonly directWebSocketUrls = this.parseDirectWebSocketUrls();
+  private readonly relaySharedSecret =
+    process.env.WS_RELAY_SHARED_SECRET ?? process.env.SESSION_SECRET ?? '';
   private readonly maxConcurrentBootstraps = Math.max(
     1,
     Number(process.env.WS_BOOTSTRAP_CONCURRENCY ?? 32)
@@ -205,7 +208,7 @@ export class StagingRealtimeDriver {
       lastStatus = auth.lastStatus;
       lastActivityAtMs = auth.lastActivityAtMs;
 
-      const wsStatus = await this.openWebSocket(sessionKey, session, baseUrl);
+      const wsStatus = await this.openWebSocket(sessionKey, session, baseUrl, identity);
       requests += wsStatus.requests;
       failures += wsStatus.failures;
       lastStatus = wsStatus.lastStatus ?? lastStatus;
@@ -226,7 +229,8 @@ export class StagingRealtimeDriver {
   private async openWebSocket(
     sessionKey: string,
     session: RealtimeSessionState,
-    baseUrl: string
+    baseUrl: string,
+    identity: AssignedMockUserIdentity
   ): Promise<RealtimeOutcome> {
     this.clearHeartbeat(session);
     this.clearHoldKeepalive(session);
@@ -242,20 +246,27 @@ export class StagingRealtimeDriver {
     }
 
     const httpBase = new URL(baseUrl);
-    const wsUrl = new URL('/ws/uconnect', baseUrl);
-    wsUrl.protocol = httpBase.protocol === 'https:' ? 'wss:' : 'ws:';
-
-    const cookieHeader = this.browserSessions.cookieHeader(sessionKey, wsUrl);
-    if (!cookieHeader) {
+    const wsTarget = this.resolveWebSocketTarget(sessionKey, baseUrl, identity);
+    const accessToken = this.browserSessions.accessToken(sessionKey);
+    const cookieHeader = wsTarget.direct
+      ? ''
+      : this.browserSessions.cookieHeader(sessionKey, wsTarget.url);
+    if (!wsTarget.direct && !cookieHeader) {
       throw new Error('Cannot open websocket without BFF session cookie');
     }
-    const accessToken = this.browserSessions.accessToken(sessionKey);
+    if (wsTarget.direct && !this.relaySharedSecret && !accessToken) {
+      throw new Error('Cannot open direct websocket without relay secret or access token');
+    }
 
     return new Promise<RealtimeOutcome>((resolve, reject) => {
       let settled = false;
-      const socket = new WebSocket(wsUrl, {
+      const socket = new WebSocket(wsTarget.url, {
         headers: {
-          Cookie: cookieHeader,
+          ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+          ...(wsTarget.direct ? { 'X-User-Id': identity.id } : {}),
+          ...(wsTarget.direct && this.relaySharedSecret
+            ? { 'X-Uconnect-Relay-Secret': this.relaySharedSecret }
+            : {}),
           ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
           Origin: httpBase.origin,
           'User-Agent': 'ucnnct-mock-worker/0.4 (+staging-ws)'
@@ -270,7 +281,7 @@ export class StagingRealtimeDriver {
         }
         settled = true;
         socket.terminate();
-        reject(new Error(`WebSocket handshake timeout for ${wsUrl}`));
+        reject(new Error(`WebSocket handshake timeout for ${wsTarget.url}`));
       }, 20_500);
 
       socket.once('open', () => {
@@ -415,6 +426,41 @@ export class StagingRealtimeDriver {
     } catch {
       // TCP keepalive is best-effort; websocket heartbeats still cover the session.
     }
+  }
+
+  private resolveWebSocketTarget(
+    sessionKey: string,
+    baseUrl: string,
+    identity: AssignedMockUserIdentity
+  ): { url: URL; direct: boolean } {
+    if (this.directWebSocketUrls.length > 0) {
+      const selected = new URL(
+        this.directWebSocketUrls[this.hashToIndex(sessionKey, this.directWebSocketUrls.length)]!
+      );
+      selected.searchParams.set('userId', identity.id);
+      return { url: selected, direct: true };
+    }
+
+    const httpBase = new URL(baseUrl);
+    const url = new URL('/ws/uconnect', baseUrl);
+    url.protocol = httpBase.protocol === 'https:' ? 'wss:' : 'ws:';
+    return { url, direct: false };
+  }
+
+  private parseDirectWebSocketUrls(): string[] {
+    const raw = process.env.WS_MANAGER_DIRECT_URLS ?? process.env.WS_MANAGER_DIRECT_URL ?? '';
+    return raw
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean);
+  }
+
+  private hashToIndex(value: string, modulo: number): number {
+    let hash = 0;
+    for (let index = 0; index < value.length; index += 1) {
+      hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+    }
+    return hash % Math.max(modulo, 1);
   }
 
   private startHeartbeat(session: RealtimeSessionState, socket: WebSocket): void {
