@@ -1374,7 +1374,7 @@ export class WorkerEngine {
   }
 
   private scheduleLiveTraffic(
-    assignment: Pick<WorkerAssignmentRuntime, 'id' | 'targetBaseUrl' | 'assignedUsers'>,
+    assignment: Pick<WorkerAssignmentRuntime, 'id' | 'targetBaseUrl' | 'assignedUsers' | 'weights'>,
     user: Pick<VirtualUserState, 'id' | 'connectedToWs' | 'identity'>,
     action: UserAction,
     options: LiveTrafficScheduleOptions = {}
@@ -1391,10 +1391,12 @@ export class WorkerEngine {
         ? assignedPeers.filter((candidate) => context.friendIds.includes(candidate.id))
         : assignedPeers;
 
+    const holdOnly = this.isSocketHoldAssignment(assignment);
     const realtimeInput = {
       sessionKey,
       baseUrl: assignment.targetBaseUrl,
       action,
+      holdOnly,
       identity: user.identity,
       peerCandidates,
       context
@@ -1402,7 +1404,7 @@ export class WorkerEngine {
     const shouldForceRealtimeBootstrap = !user.connectedToWs;
     const bootstrapOnly = shouldForceRealtimeBootstrap && action !== 'login';
 
-    if (!bootstrapOnly && !options.realtimeOnly) {
+    if (!holdOnly && !bootstrapOnly && !options.realtimeOnly) {
       this.liveTraffic.schedule({
         sessionKey,
         baseUrl: assignment.targetBaseUrl,
@@ -1419,13 +1421,15 @@ export class WorkerEngine {
 
     switch (action) {
       case 'login':
-        this.stagingApi.schedule({
-          sessionKey,
-          baseUrl: assignment.targetBaseUrl,
-          action,
-          identity: user.identity,
-          peerCandidates
-        });
+        if (!holdOnly) {
+          this.stagingApi.schedule({
+            sessionKey,
+            baseUrl: assignment.targetBaseUrl,
+            action,
+            identity: user.identity,
+            peerCandidates
+          });
+        }
         this.stagingRealtime.schedule(realtimeInput);
         break;
       case 'send_private_message':
@@ -1440,7 +1444,7 @@ export class WorkerEngine {
       case 'open_private_conversation':
       case 'open_group_conversation':
       case 'open_notifications':
-        if (!bootstrapOnly) {
+        if (!holdOnly && !bootstrapOnly) {
           this.stagingApi.schedule({
             sessionKey,
             baseUrl: assignment.targetBaseUrl,
@@ -1452,7 +1456,7 @@ export class WorkerEngine {
         this.stagingRealtime.schedule(realtimeInput);
         break;
       default:
-        if (!bootstrapOnly) {
+        if (!holdOnly && !bootstrapOnly) {
           this.stagingApi.schedule({
             sessionKey,
             baseUrl: assignment.targetBaseUrl,

@@ -9,6 +9,7 @@ type StagingRealtimeInput = {
   sessionKey: string;
   baseUrl: string;
   action: UserAction;
+  holdOnly?: boolean;
   identity: AssignedMockUserIdentity | null;
   peerCandidates: AssignedMockUserIdentity[];
   context: StagingApiContext;
@@ -148,6 +149,9 @@ export class StagingRealtimeDriver {
       input.identity!,
       session
     );
+    if (input.holdOnly) {
+      return bootstrap;
+    }
     const action = await this.handleAction(input, session);
     return this.combine(bootstrap, action);
   }
@@ -353,9 +357,14 @@ export class StagingRealtimeDriver {
       });
     });
 
-    socket.on('close', () => {
+    socket.on('close', (code, reason) => {
       if (session.ws !== socket) {
         return;
+      }
+      if (code !== 1000) {
+        console.warn(
+          `[staging-realtime] websocket closed sessionKey=${sessionKey} code=${code} reason=${reason.toString() || 'none'}`
+        );
       }
       this.clearHeartbeat(session);
       session.wsReady = false;
@@ -363,10 +372,13 @@ export class StagingRealtimeDriver {
       this.scheduleReconnect(sessionKey, session, 1_000);
     });
 
-    socket.on('error', () => {
+    socket.on('error', (error) => {
       if (session.ws !== socket) {
         return;
       }
+      console.warn(
+        `[staging-realtime] websocket error sessionKey=${sessionKey} err=${error instanceof Error ? error.message : String(error)}`
+      );
       this.clearHeartbeat(session);
       session.wsReady = false;
       this.scheduleReconnect(sessionKey, session, 1_000);
