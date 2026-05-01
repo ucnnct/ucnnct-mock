@@ -439,17 +439,18 @@ export class WorkerEngine {
         `Live assignment ${input.assignmentLabel} requires ${input.virtualUsers} dedicated identities, received ${identities.length}.`
       );
     }
-    // Without gradual online, every virtual user should stay online for the whole run.
-    const instantOnlineStart = !input.gradualOnline;
+    // Without gradual online, every virtual user still comes online and stays
+    // online for the run; rampUpSeconds only spreads the initial login burst.
+    const allUsersStayOnline = !input.gradualOnline;
 
     return Array.from({ length: input.virtualUsers }, (_value, index) => {
       const activationOffsetMs =
-        instantOnlineStart || input.virtualUsers <= 1
+        rampUpMs <= 0 || input.virtualUsers <= 1
           ? 0
-          : Math.round((index / (input.virtualUsers - 1)) * rampUpMs);
-      const initialWaveOnline = instantOnlineStart || Math.random() < input.initialOnlineRatio;
+          : this.liveActivationOffsetMs(input, index, rampUpMs);
+      const initialWaveOnline = allUsersStayOnline || Math.random() < input.initialOnlineRatio;
       const initialDelayMs = initialWaveOnline
-        ? instantOnlineStart
+        ? allUsersStayOnline
           ? this.liveLoginJitterMs(input, index)
           : this.randomInt(250, Math.max(input.thinkTimeMaxMs, 1_400))
         : this.randomInt(
@@ -1060,8 +1061,8 @@ export class WorkerEngine {
   }
 
   private socketHoldIdleDelayMs(_assignment: Pick<WorkerAssignmentRuntime, 'thinkTimeMinMs' | 'thinkTimeMaxMs'>): number {
-    const lower = 10_000;
-    const upper = 20_000;
+    const lower = 20_000;
+    const upper = 30_000;
     return this.randomInt(lower, upper);
   }
 
@@ -1181,6 +1182,20 @@ export class WorkerEngine {
     const activationWindowMs = Math.min(20_000, Math.max(6_000, Math.floor(totalUsers * 1.5)));
 
     return Math.round((globalIndex / Math.max(totalUsers - 1, 1)) * activationWindowMs);
+  }
+
+  private liveActivationOffsetMs(
+    input: Pick<WorkerAssignmentInput, 'targetBaseUrl' | 'virtualUsers' | 'totalRunVirtualUsers' | 'globalUserOffset'>,
+    index: number,
+    rampUpMs: number
+  ): number {
+    if (!input.targetBaseUrl || rampUpMs <= 0 || input.virtualUsers <= 1) {
+      return 0;
+    }
+
+    const totalUsers = Math.max(input.totalRunVirtualUsers ?? input.virtualUsers, 1);
+    const globalIndex = (input.globalUserOffset ?? 0) + index;
+    return Math.round((globalIndex / Math.max(totalUsers - 1, 1)) * rampUpMs);
   }
 
   private isLiveActivationPhase(
