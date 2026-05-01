@@ -13,6 +13,8 @@ import { ControlPlaneStore } from '../../core/services/control-plane.store';
   styleUrl: './runs-page.component.scss'
 })
 export class RunsPageComponent {
+  private static readonly HIGH_VOLUME_SOCKET_THRESHOLD = 5_000;
+
   private readonly fb = inject(FormBuilder);
   protected readonly store = inject(ControlPlaneStore);
   protected readonly selectedRunId = signal<string | null>(null);
@@ -83,6 +85,9 @@ export class RunsPageComponent {
   });
   protected readonly dominantFocus = computed(() => {
     const weights = this.preview().weights;
+    if (this.isSocketHoldProfile()) {
+      return 'websocket hold';
+    }
     return [
       { label: 'private messaging', value: weights.privateMessage },
       { label: 'group activity', value: weights.group },
@@ -156,16 +161,16 @@ export class RunsPageComponent {
 
     if (preset === 'validation10k') {
       this.form.patchValue({
-        runName: 'staging-high-volume-example',
+        runName: 'staging-10k-websocket-hold',
         virtualUsers: 10_000,
-        durationSeconds: 600,
-        rampUpSeconds: 45,
-        thinkTimeMinMs: 120,
-        thinkTimeMaxMs: 700,
+        durationSeconds: 1800,
+        rampUpSeconds: 600,
+        thinkTimeMinMs: 30000,
+        thinkTimeMaxMs: 60000,
         gradualOnline: false,
-        avgSessionDurationSeconds: 240,
-        weights: { browse: 8, privateMessage: 40, group: 34, media: 6, social: 6, notificationCheck: 6 },
-        media: { uploadProbability: 0.03 }
+        avgSessionDurationSeconds: 7200,
+        weights: { browse: 0, privateMessage: 0, group: 0, media: 0, social: 0, notificationCheck: 0 },
+        media: { uploadProbability: 0 }
       });
       return;
     }
@@ -185,6 +190,7 @@ export class RunsPageComponent {
   }
 
   protected async submit(): Promise<void> {
+    this.normalizeHighVolumeSocketRun();
     const created = await this.store.startRun(this.preview());
     if (created) {
       this.selectedRunId.set(created.id);
@@ -209,6 +215,49 @@ export class RunsPageComponent {
       return 0;
     }
     return Math.round((run.weights[key] / total) * 100);
+  }
+
+  private isSocketHoldProfile(): boolean {
+    return this.totalWeight() === 0 && this.preview().media.uploadProbability === 0;
+  }
+
+  private normalizeHighVolumeSocketRun(): void {
+    const value = this.form.getRawValue();
+    if (value.virtualUsers < RunsPageComponent.HIGH_VOLUME_SOCKET_THRESHOLD) {
+      return;
+    }
+
+    const totalWeight =
+      value.weights.browse +
+      value.weights.privateMessage +
+      value.weights.group +
+      value.weights.media +
+      value.weights.social +
+      value.weights.notificationCheck;
+
+    const alreadySocketHold =
+      totalWeight === 0 &&
+      value.media.uploadProbability === 0 &&
+      value.rampUpSeconds >= 300 &&
+      value.thinkTimeMinMs >= 10000 &&
+      value.thinkTimeMaxMs >= 10000 &&
+      value.avgSessionDurationSeconds >= value.durationSeconds;
+
+    if (alreadySocketHold) {
+      return;
+    }
+
+    this.form.patchValue({
+      runName: value.virtualUsers >= 10_000 ? 'staging-10k-websocket-hold' : `staging-${value.virtualUsers}-websocket-hold`,
+      durationSeconds: Math.max(value.durationSeconds, 1800),
+      rampUpSeconds: Math.max(value.rampUpSeconds, 600),
+      thinkTimeMinMs: 30000,
+      thinkTimeMaxMs: 60000,
+      gradualOnline: false,
+      avgSessionDurationSeconds: 7200,
+      weights: { browse: 0, privateMessage: 0, group: 0, media: 0, social: 0, notificationCheck: 0 },
+      media: { uploadProbability: 0 }
+    });
   }
 
   protected observedBehaviorRows(run: RunSummary): Array<{
