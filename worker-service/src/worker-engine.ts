@@ -1202,30 +1202,38 @@ export class WorkerEngine {
     };
 
     addChoice('open_home', user.currentPage === 'HOME' ? 2.8 : 3.8);
-    addChoice(
-      'fetch_notifications',
-      user.pendingNotifications > 0
-        ? 1.4 + assignment.weights.notificationCheck * 0.08
-        : 0.8
-    );
-    addChoice(
-      'open_notifications',
-      user.pendingNotifications > 0 ? 1.15 : 0.3
-    );
-    addChoice(
-      'fetch_friends',
-      user.knownFriends === 0
-        ? 1.6 + assignment.weights.social * 0.06
-        : 0.7
-    );
-    addChoice(
-      'open_group_conversation',
-      user.knownGroups > 0 ? 0.35 : 0.12
-    );
-    addChoice(
-      'open_private_conversation',
-      user.knownFriends > 0 ? 0.3 : 0.1
-    );
+    if (assignment.weights.notificationCheck > 0) {
+      addChoice(
+        'fetch_notifications',
+        user.pendingNotifications > 0
+          ? 1.4 + assignment.weights.notificationCheck * 0.08
+          : 0.8
+      );
+      addChoice(
+        'open_notifications',
+        user.pendingNotifications > 0 ? 1.15 : 0.3
+      );
+    }
+    if (assignment.weights.social > 0) {
+      addChoice(
+        'fetch_friends',
+        user.knownFriends === 0
+          ? 1.6 + assignment.weights.social * 0.06
+          : 0.7
+      );
+    }
+    if (assignment.weights.group > 0) {
+      addChoice(
+        'open_group_conversation',
+        user.knownGroups > 0 ? 0.35 : 0.12
+      );
+    }
+    if (assignment.weights.privateMessage > 0) {
+      addChoice(
+        'open_private_conversation',
+        user.knownFriends > 0 ? 0.3 : 0.1
+      );
+    }
 
     return this.pickWeighted(candidates);
   }
