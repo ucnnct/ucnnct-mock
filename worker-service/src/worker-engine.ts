@@ -1099,11 +1099,18 @@ export class WorkerEngine {
         if (user.currentConversationId || user.currentGroupId) {
           return 'prepare_upload';
         }
-        if (user.knownFriends === 0 && user.knownGroups === 0) {
-          return 'create_group';
+        if (user.knownFriends === 0) {
+          if (assignment.weights.group > 0 && user.knownGroups > 0) {
+            return 'open_group_conversation';
+          }
+          if (assignment.weights.group > 0) {
+            return 'create_group';
+          }
+          return 'fetch_friends';
         }
         if (
           user.knownGroups > 0 &&
+          assignment.weights.group > 0 &&
           assignment.weights.group >= assignment.weights.privateMessage * 0.8 &&
           Math.random() < 0.45
         ) {
@@ -1112,10 +1119,10 @@ export class WorkerEngine {
         if (user.knownFriends > 0) {
           return 'open_private_conversation';
         }
-        if (user.knownGroups > 0) {
+        if (assignment.weights.group > 0 && user.knownGroups > 0) {
           return 'open_group_conversation';
         }
-        return 'create_group';
+        return 'fetch_friends';
       case 'socialize':
         if (user.pendingNotifications > 0) {
           return user.currentPage === 'NOTIFICATIONS' ? 'accept_friend_request' : 'open_notifications';
