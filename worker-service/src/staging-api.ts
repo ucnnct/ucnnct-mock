@@ -1,80 +1,27 @@
-import { AssignedMockUserIdentity, UserAction } from './models.js';
+import { AssignedMockUserIdentity } from './models.js';
 import { StagingBrowserSessionManager } from './staging-browser-session.js';
 import type { LiveTrafficStats } from './live-traffic.js';
-
-type StagingApiSessionState = {
-  sessionKey: string;
-  baseUrl: string;
-  inflight: boolean;
-  pendingInput: StagingApiInput | null;
-  loginIdentity: AssignedMockUserIdentity | null;
-  selfId: string | null;
-  friendIds: string[];
-  groupIds: string[];
-  currentPeerId: string | null;
-  currentConversationId: string | null;
-  currentGroupId: string | null;
-  pendingFriendRequestIds: string[];
-  pendingNotifications: number;
-  preparedUploadKey: string | null;
-  lastStatus: number | null;
-  lastActivityAtMs: number | null;
-};
-
-type StagingApiInput = {
-  sessionKey: string;
-  baseUrl: string;
-  action: UserAction;
-  identity: AssignedMockUserIdentity | null;
-  peerCandidates: AssignedMockUserIdentity[];
-  uploadMode?: 'full' | 'upload-only';
-};
-
-export type StagingApiContext = {
-  selfId: string | null;
-  friendIds: string[];
-  groupIds: string[];
-  currentPeerId: string | null;
-  currentConversationId: string | null;
-  currentGroupId: string | null;
-  pendingNotifications: number;
-  preparedUploadKey: string | null;
-};
-
-type UserProfile = {
-  keycloakId: string;
-};
-
-type FriendRequest = {
-  requester: {
-    keycloakId: string;
-  };
-};
-
-type GroupSummary = {
-  id: string;
-};
-
-type ConversationSummary = {
-  id: string;
-  type: 'PEER' | 'GROUP';
-  participants: string[];
-};
-
-type UploadResponse = {
-  key: string;
-};
-
-type NotificationsResponse = {
-  notifications?: Array<{ status?: string }>;
-};
-
-type ApiOutcome = {
-  requests: number;
-  failures: number;
-  lastStatus: number | null;
-  lastActivityAtMs: number | null;
-};
+import {
+  buildUploadPayload,
+  combineApiResponses,
+  createStagingApiSession,
+  messageText,
+  noopApiOutcome,
+  pickPeer,
+  shortId
+} from './staging-api-support.js';
+import {
+  ApiOutcome,
+  ConversationSummary,
+  FriendRequest,
+  GroupSummary,
+  NotificationsResponse,
+  StagingApiContext,
+  StagingApiInput,
+  StagingApiSessionState,
+  UploadResponse,
+  UserProfile
+} from './staging-api-types.js';
 
 export class StagingApiDriver {
   private readonly sessions = new Map<string, StagingApiSessionState>();
@@ -212,14 +159,14 @@ export class StagingApiDriver {
     await this.ensureAuthenticated(session, input.identity!);
     const me = await this.apiJson<UserProfile>(input.baseUrl, session, '/api/users/me');
     session.selfId = me.body.keycloakId;
-    return this.combine([me]);
+    return combineApiResponses([me]);
   }
 
   private async handleGetMe(input: StagingApiInput, session: StagingApiSessionState): Promise<ApiOutcome> {
     await this.ensureAuthenticated(session, input.identity!);
     const me = await this.apiJson<UserProfile>(input.baseUrl, session, '/api/users/me');
     session.selfId = me.body.keycloakId;
-    return this.combine([me]);
+    return combineApiResponses([me]);
   }
 
   private async handleNotifications(input: StagingApiInput, session: StagingApiSessionState): Promise<ApiOutcome> {
@@ -233,14 +180,14 @@ export class StagingApiDriver {
     session.pendingNotifications = (response.body.notifications ?? []).filter(
       (notification) => (notification.status ?? '').toUpperCase() !== 'READ'
     ).length;
-    return this.combine([response]);
+    return combineApiResponses([response]);
   }
 
   private async handleFetchFriends(input: StagingApiInput, session: StagingApiSessionState): Promise<ApiOutcome> {
     await this.ensureAuthenticated(session, input.identity!);
     const friends = await this.apiJson<Array<UserProfile>>(input.baseUrl, session, '/api/friends');
     session.friendIds = friends.body.map((friend) => friend.keycloakId);
-    return this.combine([friends]);
+    return combineApiResponses([friends]);
   }
 
   private async handleOpenPrivateConversation(input: StagingApiInput, session: StagingApiSessionState): Promise<ApiOutcome> {
@@ -250,14 +197,14 @@ export class StagingApiDriver {
     session.currentConversationId = peerConversation?.id ?? null;
     session.currentPeerId =
       peerConversation?.participants.find((participant) => participant !== session.selfId) ?? null;
-    return this.combine([conversations]);
+    return combineApiResponses([conversations]);
   }
 
   private async handleSendPrivateMessage(input: StagingApiInput, session: StagingApiSessionState): Promise<ApiOutcome> {
     await this.ensureAuthenticated(session, input.identity!);
-    const peer = this.pickPeer(input);
+    const peer = pickPeer(input);
     if (!peer) {
-      return this.noop();
+      return noopApiOutcome();
     }
 
     const message = await this.apiJson<{ conversationId?: string }>(input.baseUrl, session, '/api/chat/messages', {
@@ -265,12 +212,12 @@ export class StagingApiDriver {
       body: JSON.stringify({
         type: 'PEER',
         targetId: peer.id,
-        content: this.messageText('private'),
+        content: messageText('private'),
         format: 'TEXT'
       })
     });
     session.currentConversationId = message.body.conversationId ?? session.currentConversationId;
-    return this.combine([message]);
+    return combineApiResponses([message]);
   }
 
   private async handleOpenGroupConversation(input: StagingApiInput, session: StagingApiSessionState): Promise<ApiOutcome> {
@@ -278,7 +225,7 @@ export class StagingApiDriver {
     const groups = await this.apiJson<GroupSummary[]>(input.baseUrl, session, '/api/groups/me');
     session.groupIds = groups.body.map((group) => group.id);
     session.currentGroupId = session.groupIds[0] ?? null;
-    return this.combine([groups]);
+    return combineApiResponses([groups]);
   }
 
   private async handleCreateGroup(input: StagingApiInput, session: StagingApiSessionState): Promise<ApiOutcome> {
@@ -286,22 +233,22 @@ export class StagingApiDriver {
     const response = await this.apiJson<GroupSummary>(input.baseUrl, session, '/api/groups', {
       method: 'POST',
       body: JSON.stringify({
-        name: `Mock ${input.identity!.username} ${this.shortId()}`,
+        name: `Mock ${input.identity!.username} ${shortId()}`,
         description: 'Provisioned by worker-service',
         type: 'PRIVATE'
       })
     });
     session.currentGroupId = response.body.id;
     session.groupIds = [...new Set([...session.groupIds, response.body.id])];
-    return this.combine([response]);
+    return combineApiResponses([response]);
   }
 
   private async handleAddMember(input: StagingApiInput, session: StagingApiSessionState): Promise<ApiOutcome> {
     await this.ensureAuthenticated(session, input.identity!);
     const groupId = await this.ensureGroupId(input, session);
-    const peer = this.pickPeer(input);
+    const peer = pickPeer(input);
     if (!groupId || !peer) {
-      return this.noop();
+      return noopApiOutcome();
     }
 
     const response = await this.apiJson(
@@ -317,14 +264,14 @@ export class StagingApiDriver {
       },
       { treatStatusesAsSuccess: [201, 409] }
     );
-    return this.combine([response]);
+    return combineApiResponses([response]);
   }
 
   private async handleSendGroupMessage(input: StagingApiInput, session: StagingApiSessionState): Promise<ApiOutcome> {
     await this.ensureAuthenticated(session, input.identity!);
     const groupId = await this.ensureGroupId(input, session);
     if (!groupId) {
-      return this.noop();
+      return noopApiOutcome();
     }
 
     const response = await this.apiJson(input.baseUrl, session, '/api/chat/messages', {
@@ -332,17 +279,17 @@ export class StagingApiDriver {
       body: JSON.stringify({
         type: 'GROUP',
         targetId: groupId,
-        content: this.messageText('group'),
+        content: messageText('group'),
         format: 'TEXT'
       })
     });
     session.currentGroupId = groupId;
-    return this.combine([response]);
+    return combineApiResponses([response]);
   }
 
   private async handlePrepareUpload(input: StagingApiInput, session: StagingApiSessionState): Promise<ApiOutcome> {
     await this.ensureAuthenticated(session, input.identity!);
-    const payload = this.buildUploadPayload(input.identity?.username ?? 'mock');
+    const payload = buildUploadPayload(input.identity?.username ?? 'mock');
     const response = await this.apiJson<{ objectKey?: string }>(
       input.baseUrl,
       session,
@@ -358,12 +305,12 @@ export class StagingApiDriver {
       }
     );
     session.preparedUploadKey = response.body.objectKey ?? null;
-    return this.combine([response]);
+    return combineApiResponses([response]);
   }
 
   private async handleUploadFile(input: StagingApiInput, session: StagingApiSessionState): Promise<ApiOutcome> {
     await this.ensureAuthenticated(session, input.identity!);
-    const payload = this.buildUploadPayload(input.identity?.username ?? 'mock');
+    const payload = buildUploadPayload(input.identity?.username ?? 'mock');
     const upload = await this.uploadMultipart(input.baseUrl, session, '/api/media/upload?folder=mock-worker', {
       fileName: payload.fileName,
       mimeType: payload.mimeType,
@@ -373,15 +320,15 @@ export class StagingApiDriver {
     const objectKey = upload.body.key;
     session.preparedUploadKey = objectKey ?? session.preparedUploadKey;
     if (!objectKey) {
-      return this.combine([upload]);
+      return combineApiResponses([upload]);
     }
 
     if (input.uploadMode === 'upload-only') {
-      return this.combine([upload]);
+      return combineApiResponses([upload]);
     }
 
     const groupId = session.currentGroupId;
-    const peer = this.pickPeer(input);
+    const peer = pickPeer(input);
     const message = await this.apiJson(
       input.baseUrl,
       session,
@@ -398,7 +345,7 @@ export class StagingApiDriver {
       }
     );
 
-    return this.combine([upload, message]);
+    return combineApiResponses([upload, message]);
   }
 
   private async handleAcceptFriendRequest(input: StagingApiInput, session: StagingApiSessionState): Promise<ApiOutcome> {
@@ -406,7 +353,7 @@ export class StagingApiDriver {
     const requests = await this.apiJson<FriendRequest[]>(input.baseUrl, session, '/api/friends/requests');
     const requesterId = requests.body[0]?.requester?.keycloakId;
     if (!requesterId) {
-      return this.combine([requests]);
+      return combineApiResponses([requests]);
     }
 
     const accepted = await this.apiJson(
@@ -415,7 +362,7 @@ export class StagingApiDriver {
       `/api/friends/accept/${encodeURIComponent(requesterId)}`,
       { method: 'POST' }
     );
-    return this.combine([requests, accepted]);
+    return combineApiResponses([requests, accepted]);
   }
 
   private async ensureAuthenticated(session: StagingApiSessionState, identity: AssignedMockUserIdentity): Promise<void> {
@@ -505,58 +452,10 @@ export class StagingApiDriver {
     return { body: (await response.json()) as UploadResponse, status: response.status };
   }
 
-  private combine(responses: Array<{ status: number }>): ApiOutcome {
-    if (responses.length === 0) {
-      return this.noop();
-    }
-
-    return {
-      requests: responses.length,
-      failures: responses.filter((response) => response.status >= 400).length,
-      lastStatus: responses.at(-1)?.status ?? null,
-      lastActivityAtMs: Date.now()
-    };
-  }
-
-  private noop(): ApiOutcome {
-    return {
-      requests: 0,
-      failures: 0,
-      lastStatus: null,
-      lastActivityAtMs: Date.now()
-    };
-  }
-
-  private pickPeer(input: StagingApiInput): AssignedMockUserIdentity | null {
-    if (input.peerCandidates.length === 0) {
-      return null;
-    }
-
-    const index = Math.floor(Math.random() * input.peerCandidates.length);
-    return input.peerCandidates[index] ?? null;
-  }
-
   private getOrCreateSession(sessionKey: string): StagingApiSessionState {
     let session = this.sessions.get(sessionKey);
     if (!session) {
-      session = {
-        inflight: false,
-        sessionKey,
-        baseUrl: '',
-        pendingInput: null,
-        loginIdentity: null,
-        selfId: null,
-        friendIds: [],
-        groupIds: [],
-        currentPeerId: null,
-        currentConversationId: null,
-        currentGroupId: null,
-        pendingFriendRequestIds: [],
-        pendingNotifications: 0,
-        preparedUploadKey: null,
-        lastStatus: null,
-        lastActivityAtMs: null
-      };
+      session = createStagingApiSession(sessionKey);
       this.sessions.set(sessionKey, session);
     }
     return session;
@@ -570,47 +469,5 @@ export class StagingApiDriver {
       lastStatus: outcome.lastStatus ?? previous.lastStatus,
       lastActivityAtMs: outcome.lastActivityAtMs ?? previous.lastActivityAtMs
     });
-  }
-
-  private messageText(kind: 'private' | 'group'): string {
-    const suffix = Math.random().toString(36).slice(2, 8);
-    return kind === 'private'
-      ? `Mock private message ${suffix}`
-      : `Mock group message ${suffix}`;
-  }
-
-  private buildUploadPayload(username: string): {
-    fileName: string;
-    mimeType: string;
-    size: number;
-    content: string;
-  } {
-    const extension = Math.random() < 0.55 ? 'txt' : 'json';
-    const mimeType = extension === 'json' ? 'application/json' : 'text/plain';
-    const header =
-      extension === 'json'
-        ? JSON.stringify({
-            source: 'mock-worker',
-            username,
-            generatedAt: new Date().toISOString()
-          }) + '\n'
-        : `Mock upload from ${username} at ${new Date().toISOString()}\n`;
-    const targetSize = 96 * 1024 + Math.floor(Math.random() * 96 * 1024);
-    const chunk = extension === 'json' ? '{"kind":"mock-upload","payload":"staging-media"}\n' : 'staging-media-payload\n';
-    let content = header;
-    while (content.length < targetSize) {
-      content += chunk;
-    }
-
-    return {
-      fileName: `mock-${this.shortId()}.${extension}`,
-      mimeType,
-      size: Buffer.byteLength(content, 'utf8'),
-      content
-    };
-  }
-
-  private shortId(): string {
-    return Math.random().toString(36).slice(2, 7);
   }
 }

@@ -3,7 +3,7 @@ import WebSocket from 'ws';
 import { AssignedMockUserIdentity, UserAction } from './models.js';
 import { StagingBrowserSessionManager } from './staging-browser-session.js';
 import type { LiveTrafficStats } from './live-traffic.js';
-import type { StagingApiContext } from './staging-api.js';
+import type { StagingApiContext } from './staging-api-types.js';
 
 type StagingRealtimeInput = {
   sessionKey: string;

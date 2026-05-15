@@ -1,6 +1,5 @@
 import crypto from 'node:crypto';
 import {
-  ArchitectureStage,
   BehaviorWeights,
   ControlPlaneSnapshot,
   DashboardStats,
@@ -10,7 +9,6 @@ import {
   LoadPlannerConfig,
   MockUserRuntime,
   RunDraftInput,
-  RunEvent,
   RunSummary,
   ScalingEvent,
   ServiceScaling,
@@ -18,136 +16,44 @@ import {
 } from './models.js';
 import {
   KubernetesWorkerController,
-  WorkerNodeMetric,
-  WorkerPodTarget
+  WorkerNodeMetric
 } from './kubernetes-worker-controller.js';
 import {
   StagingClusterReader,
   StagingServiceDefinition
 } from './staging-cluster-reader.js';
-
-type WorkerObjectiveMix = {
-  browse: number;
-  reply_messages: number;
-  socialize: number;
-  group_activity: number;
-  share_file: number;
-};
-
-type WorkerActionCounters = {
-  login: number;
-  open_home: number;
-  fetch_notifications: number;
-  fetch_friends: number;
-  open_private_conversation: number;
-  send_private_message: number;
-  open_group_conversation: number;
-  send_group_message: number;
-  create_group: number;
-  add_member: number;
-  prepare_upload: number;
-  upload_file: number;
-  open_notifications: number;
-  accept_friend_request: number;
-  logout: number;
-};
-
-type WorkerAssignment = {
-  runId: string;
-  assignmentLabel: string;
-  environment: 'staging';
-  virtualUsers: number;
-  durationSeconds: number;
-  rampUpSeconds: number;
-  thinkTimeMinMs: number;
-  thinkTimeMaxMs: number;
-  gradualOnline: boolean;
-  initialOnlineRatio: number;
-  avgSessionDurationSeconds: number;
-  weights: BehaviorWeights;
-  media: {
-    uploadProbability: number;
-  };
-  targetBaseUrl?: string;
-  id: string;
-  status: 'running' | 'paused' | 'completed' | 'failed';
-  elapsedSeconds: number;
-  progressPercent: number;
-  activeUsers: number;
-  authenticatedUsers: number;
-  connectedUsers: number;
-  requestsPerSecond: number;
-  messagesPerSecond: number;
-  uploadsPerMinute: number;
-  notificationChecksPerMinute: number;
-  errorRate: number;
-  p95LatencyMs: number;
-  objectiveMix: WorkerObjectiveMix;
-  actionCounters: WorkerActionCounters;
-  recentEvents: Array<{
-    id: string;
-    timestamp: string;
-    userId: string;
-    objective: keyof WorkerObjectiveMix | null;
-    action: string;
-    detail: string;
-  }>;
-  createdAt: string;
-  updatedAt: string;
-  startedAt: string;
-};
-
-type WorkerRuntime = {
-  service: 'worker-service';
-  generatedAt: string;
-  activeAssignments: number;
-  runningUsers: number;
-  connectedUsers: number;
-  requestsPerSecond: number;
-  messagesPerSecond: number;
-  uploadsPerMinute: number;
-  avgP95LatencyMs: number;
-};
-
-type LeaseResponse = {
-  lease: LeaseRecord;
-  assignedUsers: Array<{
-    id: string;
-    username: string;
-    displayName: string;
-    email: string;
-    password?: string | null;
-  }>;
-};
-
-type DependencyHealth = {
-  service: string;
-  status: string;
-  environment: string;
-  generatedAt: string;
-};
-
-type WorkerTarget = WorkerPodTarget & { kind: 'pod' | 'service' };
-type WorkerSource = { target: WorkerTarget; runtime: WorkerRuntime; assignments: WorkerAssignment[] };
-type WorkerAssignmentRef = { target: WorkerTarget; assignment: WorkerAssignment };
-type BootstrapRun = { summary: RunSummary; cancelled: boolean; leaseId: string | null };
-type DispatchHold = { summary: RunSummary; expiresAtMs: number };
-type RunPlan = {
-  input: RunDraftInput;
-  shardSize: number;
-  workerShards: number;
-  targetWorkerReplicas: number;
-  leasedIdentities: number;
-};
-
-type ServiceDefinition = {
-  id: string;
-  name: string;
-  focus: ServiceScaling['focus'];
-  fallbackMinReplicas: number;
-  fallbackMaxReplicas: number;
-  note: string;
-};
+import { ARCHITECTURE, SERVICE_DEFINITIONS } from './control-plane-catalog.js';
+import {
+  partitionAssignedUsers,
+  splitVirtualUsers
+} from './control-plane-helpers.js';
+import {
+  buildRunPlan,
+  buildEstimatedServiceScaling,
+  buildRunSummary,
+  createBootstrapSummary,
+  overlayTransientRun,
+  resolveRunStatus,
+  toCompletedBootstrapSummary,
+  toStoppingSummary
+} from './control-plane-run-summary.js';
+import {
+  buildDashboardStats,
+  buildScalingEventFeed,
+  buildWorkerNodesFromSources
+} from './control-plane-dashboard.js';
+import {
+  BootstrapRun,
+  DependencyHealth,
+  DispatchHold,
+  LeaseResponse,
+  RunPlan,
+  WorkerAssignment,
+  WorkerAssignmentRef,
+  WorkerRuntime,
+  WorkerSource,
+  WorkerTarget
+} from './control-plane-types.js';
 
 export class ControlPlaneService {
   private readonly workerOrigin = process.env.WORKER_SERVICE_ORIGIN ?? 'http://localhost:7400';
@@ -166,63 +72,8 @@ export class ControlPlaneService {
     maxVirtualUsers: Number(process.env.MAX_VIRTUAL_USERS ?? 10_000)
   };
 
-  private readonly architecture: ArchitectureStage[] = [
-    {
-      id: 'ui',
-      title: 'Angular control center',
-      summary: 'Operators compose runs, preview shard plans, and monitor the autoscaled worker plane in one place.',
-      bullets: [
-        'Run builder shows shard count, required staging identities and requested worker replicas',
-        'The entered virtual user count remains operator-defined',
-        'All traffic remains scoped to staging'
-      ],
-      tone: 'ui'
-    },
-    {
-      id: 'control',
-      title: 'Node orchestrator and planner',
-      summary: 'The orchestrator leases one staging identity per virtual user, requests worker scale, then dispatches shards across the cluster.',
-      bullets: [
-        'Planner supports arbitrary volumes up to the configured ceiling',
-        'In-cluster scale control for worker-service',
-        'Shard telemetry is aggregated back into one run'
-      ],
-      tone: 'control'
-    },
-    {
-      id: 'worker',
-      title: 'Worker-service execution plane',
-      summary: 'The generic behavior engine runs on autoscaled worker pods and binds each virtual user to its own leased staging identity within each shard.',
-      bullets: [
-        'Mixed HTTP and websocket behavior',
-        'Private, group, media and social actions',
-        'Shard-ready execution distributed across pods'
-      ],
-      tone: 'worker'
-    },
-    {
-      id: 'target',
-      title: 'Staging business platform',
-      summary: 'Generated traffic hits the staging ingress and exposes replica, latency and pressure signals across the business platform.',
-      bullets: [
-        'Frontend, gateway and realtime paths',
-        'Messaging, group, media and notification pressure',
-        'HPA-aware view of the target services'
-      ],
-      tone: 'target'
-    }
-  ];
-
-  private readonly serviceDefinitions: ServiceDefinition[] = [
-    { id: 'svc-front', name: 'web-frontend', focus: 'frontend', fallbackMinReplicas: 2, fallbackMaxReplicas: 8, note: 'Frontend reacts mainly to browse and navigation density.' },
-    { id: 'svc-bff', name: 'bff', focus: 'gateway', fallbackMinReplicas: 2, fallbackMaxReplicas: 8, note: 'Gateway pressure follows mixed HTTP traffic and auth fan-in.' },
-    { id: 'svc-ws', name: 'ws-manager', focus: 'realtime', fallbackMinReplicas: 3, fallbackMaxReplicas: 10, note: 'Realtime load rises with socket occupancy and message spikes.' },
-    { id: 'svc-chat', name: 'chat-service', focus: 'chat', fallbackMinReplicas: 2, fallbackMaxReplicas: 8, note: 'Mongo persistence and message fan-out dominate here.' },
-    { id: 'svc-group', name: 'group-service', focus: 'group', fallbackMinReplicas: 2, fallbackMaxReplicas: 6, note: 'Group resolution becomes visible when group intent dominates.' },
-    { id: 'svc-media', name: 'media-service', focus: 'media', fallbackMinReplicas: 1, fallbackMaxReplicas: 6, note: 'Uploads are rare but produce sharp bursts toward MinIO.' },
-    { id: 'svc-notif', name: 'notification-service', focus: 'notifications', fallbackMinReplicas: 2, fallbackMaxReplicas: 8, note: 'Notification fan-out reacts to message, social and group churn.' },
-    { id: 'svc-user', name: 'user-service', focus: 'identity', fallbackMinReplicas: 2, fallbackMaxReplicas: 6, note: 'Friends, profiles and social graph reads keep this service warm.' }
-  ];
+  private readonly architecture = ARCHITECTURE;
+  private readonly serviceDefinitions = SERVICE_DEFINITIONS;
 
   constructor() {
     void this.reconcileWorkerAutoscaling('startup');
@@ -270,7 +121,7 @@ export class ControlPlaneService {
     const groupedAssignments = this.groupAssignments(workerSources);
     const completedRunIds = Array.from(groupedAssignments.entries())
       .filter(([, assignments]) => {
-        const status = this.resolveRunStatus(assignments);
+        const status = resolveRunStatus(assignments);
         return status === 'completed' || status === 'failed';
       })
       .map(([runId]) => runId);
@@ -320,14 +171,14 @@ export class ControlPlaneService {
       });
     Array.from(this.stoppingRuns.entries()).forEach(([runId, stoppingSummary]) => {
       const current = runMap.get(runId);
-      runMap.set(runId, current ? this.overlayTransientRun(current, stoppingSummary) : stoppingSummary);
+      runMap.set(runId, current ? overlayTransientRun(current, stoppingSummary) : stoppingSummary);
     });
 
     const runs = Array.from(runMap.values()).sort((left, right) => right.startedAt.localeCompare(left.startedAt));
 
     const services = await this.buildServices(runs);
     const workerNodes = await this.buildWorkerNodes(workerSources);
-    const dashboard = this.buildDashboard(runs, services, workerSources, workerNodes);
+    const dashboard = buildDashboardStats(runs, services, workerSources, workerNodes);
 
     if (
       runs.every(
@@ -353,7 +204,7 @@ export class ControlPlaneService {
       userRuntime,
       fixtures,
       leases: currentLeases,
-      scalingEvents: this.buildScalingEvents(services, runs, workerSources),
+      scalingEvents: buildScalingEventFeed(services, runs, workerSources),
       generatedAt: new Date().toISOString()
     };
   }
@@ -400,8 +251,8 @@ export class ControlPlaneService {
     }
 
     const runId = `run-${crypto.randomUUID().slice(0, 8)}`;
-    const plan = this.buildRunPlan(input);
-    const summary = this.createBootstrapSummary(runId, plan);
+    const plan = buildRunPlan(input, this.planner, (value, min, max) => this.clamp(value, min, max));
+    const summary = createBootstrapSummary(runId, plan);
 
     this.runPlans.set(runId, plan);
     this.bootstrapRuns.set(runId, { summary, cancelled: false, leaseId: null });
@@ -467,8 +318,8 @@ export class ControlPlaneService {
         ? await this.summarizeAssignments(runId, assignments)
         : bootstrapRun?.summary ??
           dispatchHold?.summary ??
-          this.createBootstrapSummary(runId, this.runPlans.get(runId)!);
-    const stoppingSummary = this.toStoppingSummary(baseSummary);
+          createBootstrapSummary(runId, this.runPlans.get(runId)!);
+    const stoppingSummary = toStoppingSummary(baseSummary);
 
     if (assignments.length > 0) {
       this.stoppingRuns.set(runId, stoppingSummary);
@@ -528,7 +379,7 @@ export class ControlPlaneService {
       bootstrapRun.leaseId = leaseId;
       if (bootstrapRun.cancelled) {
         await this.releaseRunLease(runId);
-        this.updateBootstrapRun(runId, (summary) => this.toCompletedBootstrapSummary(summary));
+        this.updateBootstrapRun(runId, (summary) => toCompletedBootstrapSummary(summary));
         await this.reconcileWorkerAutoscaling(`bootstrap-cancelled-before-capacity:${runId}`);
         return;
       }
@@ -555,7 +406,7 @@ export class ControlPlaneService {
 
       if (this.bootstrapRuns.get(runId)?.cancelled) {
         await this.releaseRunLease(runId);
-        this.updateBootstrapRun(runId, (summary) => this.toCompletedBootstrapSummary(summary));
+        this.updateBootstrapRun(runId, (summary) => toCompletedBootstrapSummary(summary));
         await this.reconcileWorkerAutoscaling(`bootstrap-cancelled-after-capacity:${runId}`);
         return;
       }
@@ -564,8 +415,8 @@ export class ControlPlaneService {
         throw new Error('No ready worker-service targets were available to receive shard assignments.');
       }
 
-      const shardSizes = this.splitVirtualUsers(plan.input.virtualUsers, plan.workerShards);
-      const identityBuckets = this.partitionAssignedUsers(lease.assignedUsers, shardSizes);
+      const shardSizes = splitVirtualUsers(plan.input.virtualUsers, plan.workerShards);
+      const identityBuckets = partitionAssignedUsers(lease.assignedUsers, shardSizes);
       await this.dispatchAssignmentsProgressively(
         runId,
         plan,
@@ -576,7 +427,7 @@ export class ControlPlaneService {
       );
 
       const dispatchTimestamp = new Date().toISOString();
-      const dispatchSummary = this.bootstrapRuns.get(runId)?.summary ?? this.createBootstrapSummary(runId, plan);
+      const dispatchSummary = this.bootstrapRuns.get(runId)?.summary ?? createBootstrapSummary(runId, plan);
       this.dispatchHolds.set(runId, {
         summary: {
           ...dispatchSummary,
@@ -619,7 +470,7 @@ export class ControlPlaneService {
         error instanceof Error ? error.message : error
       );
       if (this.bootstrapRuns.get(runId)?.cancelled) {
-        this.updateBootstrapRun(runId, (summary) => this.toCompletedBootstrapSummary(summary));
+        this.updateBootstrapRun(runId, (summary) => toCompletedBootstrapSummary(summary));
       } else {
         this.updateBootstrapRun(runId, (summary) => ({
           ...summary,
@@ -640,56 +491,6 @@ export class ControlPlaneService {
       }
       await this.reconcileWorkerAutoscaling(`bootstrap-failed:${runId}`);
     }
-  }
-
-  private buildRunPlan(input: RunDraftInput): RunPlan {
-    const shardSize = Math.max(1, this.planner.workerShardSize);
-    const workerShards = Math.max(1, Math.ceil(input.virtualUsers / shardSize));
-    const targetWorkerReplicas = this.clamp(
-      workerShards,
-      this.planner.workerMinReplicas,
-      this.planner.workerMaxReplicas
-    );
-    const leasedIdentities = input.virtualUsers;
-
-    return { input, shardSize, workerShards, targetWorkerReplicas, leasedIdentities };
-  }
-
-  private createBootstrapSummary(runId: string, plan: RunPlan): RunSummary {
-    const timestamp = new Date().toISOString();
-    return {
-      ...plan.input,
-      id: runId,
-      status: 'starting',
-      leasedIdentities: plan.leasedIdentities,
-      workerShards: plan.workerShards,
-      targetWorkerReplicas: plan.targetWorkerReplicas,
-      startedAt: timestamp,
-      updatedAt: timestamp,
-      elapsedSeconds: 0,
-      progressPercent: 0,
-      activeUsers: 0,
-      connectedUsers: 0,
-      openSockets: 0,
-      requestsPerSecond: 0,
-      messagesPerSecond: 0,
-      uploadsPerMinute: 0,
-      errorRate: 0,
-      p95LatencyMs: 0,
-      topServices: this.pickTopServices(plan.input.weights),
-      objectiveMix: this.emptyObjectiveMix(),
-      actionCounters: this.emptyActionCounters(),
-      events: [
-        {
-          id: `bootstrap-queued-${crypto.randomUUID().slice(0, 8)}`,
-          timestamp,
-          severity: 'info',
-          title: 'Run accepted',
-          detail: `Run ${plan.input.runName} was accepted and queued for ${plan.workerShards} worker shards.`
-        }
-      ],
-      milestoneIndex: 0
-    };
   }
 
   private updateBootstrapRun(runId: string, updater: (summary: RunSummary) => RunSummary): void {
@@ -722,7 +523,7 @@ export class ControlPlaneService {
       await this.releaseRunLease(runId);
 
       if (hasBootstrapRun && assignments.length === 0) {
-        this.updateBootstrapRun(runId, (summary) => this.toCompletedBootstrapSummary(summary));
+        this.updateBootstrapRun(runId, (summary) => toCompletedBootstrapSummary(summary));
       }
     } finally {
       this.stoppingRuns.delete(runId);
@@ -838,7 +639,7 @@ export class ControlPlaneService {
       if (this.bootstrapRuns.get(runId)?.cancelled) {
         await this.stopCreatedAssignments(createdAssignments);
         await this.releaseRunLease(runId);
-        this.updateBootstrapRun(runId, (summary) => this.toCompletedBootstrapSummary(summary));
+        this.updateBootstrapRun(runId, (summary) => toCompletedBootstrapSummary(summary));
         throw new Error(`Run ${runId} bootstrap cancelled during shard dispatch.`);
       }
 
@@ -1010,58 +811,6 @@ export class ControlPlaneService {
     );
   }
 
-  private overlayTransientRun(current: RunSummary, transient: RunSummary): RunSummary {
-    return {
-      ...current,
-      status: transient.status,
-      updatedAt: transient.updatedAt,
-      events: transient.events,
-      progressPercent: transient.progressPercent
-    };
-  }
-
-  private toStoppingSummary(summary: RunSummary): RunSummary {
-    const timestamp = new Date().toISOString();
-    return {
-      ...summary,
-      status: 'stopping',
-      updatedAt: timestamp,
-      events: [
-        {
-          id: `stop-requested-${crypto.randomUUID().slice(0, 8)}`,
-          timestamp,
-          severity: 'warning' as const,
-          title: 'Stop requested',
-          detail: 'Run shutdown is in progress; worker assignments and leases are being closed.'
-        },
-        ...summary.events
-      ].slice(0, 10)
-    };
-  }
-
-  private toCompletedBootstrapSummary(summary: RunSummary): RunSummary {
-    const timestamp = new Date().toISOString();
-    return {
-      ...summary,
-      status: 'completed',
-      progressPercent: 100,
-      activeUsers: 0,
-      connectedUsers: 0,
-      openSockets: 0,
-      updatedAt: timestamp,
-      events: [
-        {
-          id: `bootstrap-stop-${crypto.randomUUID().slice(0, 8)}`,
-          timestamp,
-          severity: 'warning' as const,
-          title: 'Run bootstrap cancelled',
-          detail: 'Provisioning was cancelled before worker shard dispatch completed.'
-        },
-        ...summary.events
-      ].slice(0, 10)
-    };
-  }
-
   private async releaseRunLease(runId: string): Promise<void> {
     await this.safeJson(`${this.mockUserOrigin}/api/v1/mock-users/runs/${runId}/release`, null, {
       method: 'POST'
@@ -1156,214 +905,13 @@ export class ControlPlaneService {
 
   private aggregateRunSummary(runId: string, assignments: WorkerAssignmentRef[], leases: LeaseRecord[]): RunSummary {
     this.dispatchHolds.delete(runId);
-    const plan = this.runPlans.get(runId);
-    const first = assignments[0]!.assignment;
-    const input = plan?.input ?? this.draftFromAssignment(first);
-    const totalVirtualUsers = assignments.reduce((sum, item) => sum + item.assignment.virtualUsers, 0);
-    const weightBase = Math.max(totalVirtualUsers, 1);
-    const progressPercent = Math.round(
-      assignments.reduce((sum, item) => sum + item.assignment.progressPercent * item.assignment.virtualUsers, 0) /
-        weightBase
-    );
-    const recentEvents = assignments
-      .flatMap((item) => item.assignment.recentEvents)
-      .sort((left, right) => right.timestamp.localeCompare(left.timestamp))
-      .slice(0, 10)
-      .map((event) => this.toRunEvent(event));
-    const objectiveMix = assignments.reduce(
-      (aggregate, item) => ({
-        browse: aggregate.browse + item.assignment.objectiveMix.browse,
-        reply_messages: aggregate.reply_messages + item.assignment.objectiveMix.reply_messages,
-        socialize: aggregate.socialize + item.assignment.objectiveMix.socialize,
-        group_activity: aggregate.group_activity + item.assignment.objectiveMix.group_activity,
-        share_file: aggregate.share_file + item.assignment.objectiveMix.share_file
-      }),
-      this.emptyObjectiveMix()
-    );
-    const actionCounters = assignments.reduce(
-      (aggregate, item) => ({
-        login: aggregate.login + item.assignment.actionCounters.login,
-        open_home: aggregate.open_home + item.assignment.actionCounters.open_home,
-        fetch_notifications:
-          aggregate.fetch_notifications + item.assignment.actionCounters.fetch_notifications,
-        fetch_friends: aggregate.fetch_friends + item.assignment.actionCounters.fetch_friends,
-        open_private_conversation:
-          aggregate.open_private_conversation +
-          item.assignment.actionCounters.open_private_conversation,
-        send_private_message:
-          aggregate.send_private_message + item.assignment.actionCounters.send_private_message,
-        open_group_conversation:
-          aggregate.open_group_conversation + item.assignment.actionCounters.open_group_conversation,
-        send_group_message:
-          aggregate.send_group_message + item.assignment.actionCounters.send_group_message,
-        create_group: aggregate.create_group + item.assignment.actionCounters.create_group,
-        add_member: aggregate.add_member + item.assignment.actionCounters.add_member,
-        prepare_upload: aggregate.prepare_upload + item.assignment.actionCounters.prepare_upload,
-        upload_file: aggregate.upload_file + item.assignment.actionCounters.upload_file,
-        open_notifications:
-          aggregate.open_notifications + item.assignment.actionCounters.open_notifications,
-        accept_friend_request:
-          aggregate.accept_friend_request + item.assignment.actionCounters.accept_friend_request,
-        logout: aggregate.logout + item.assignment.actionCounters.logout
-      }),
-      this.emptyActionCounters()
-    );
-    const lease = leases
-      .filter((candidate) => candidate.runId === runId)
-      .sort((left, right) => right.issuedAt.localeCompare(left.issuedAt))[0];
-
-    return {
-      ...input,
-      id: runId,
-      status: this.resolveRunStatus(assignments),
-      leasedIdentities: plan?.leasedIdentities ?? lease?.users ?? totalVirtualUsers,
-      workerShards: plan?.workerShards ?? assignments.length,
-      targetWorkerReplicas:
-        plan?.targetWorkerReplicas ?? new Set(assignments.map((item) => item.target.name)).size,
-      startedAt: assignments.map((item) => item.assignment.startedAt).sort()[0]!,
-      updatedAt: assignments.map((item) => item.assignment.updatedAt).sort().reverse()[0]!,
-      elapsedSeconds: Math.max(...assignments.map((item) => item.assignment.elapsedSeconds)),
-      progressPercent,
-      activeUsers: assignments.reduce((sum, item) => sum + item.assignment.activeUsers, 0),
-      connectedUsers: assignments.reduce((sum, item) => sum + item.assignment.connectedUsers, 0),
-      openSockets: assignments.reduce((sum, item) => sum + item.assignment.connectedUsers, 0),
-      requestsPerSecond: this.round(
-        assignments.reduce((sum, item) => sum + item.assignment.requestsPerSecond, 0),
-        1
-      ),
-      messagesPerSecond: this.round(
-        assignments.reduce((sum, item) => sum + item.assignment.messagesPerSecond, 0),
-        1
-      ),
-      uploadsPerMinute: this.round(
-        assignments.reduce((sum, item) => sum + item.assignment.uploadsPerMinute, 0),
-        1
-      ),
-      errorRate: this.round(
-        assignments.reduce((sum, item) => sum + item.assignment.errorRate * item.assignment.virtualUsers, 0) /
-          weightBase,
-        3
-      ),
-      p95LatencyMs: Math.max(...assignments.map((item) => item.assignment.p95LatencyMs)),
-      topServices: this.pickTopServices(input.weights),
-      objectiveMix,
-      actionCounters,
-      events: recentEvents,
-      milestoneIndex: [25, 50, 75, 100].filter((mark) => progressPercent >= mark).length
-    };
-  }
-
-  private resolveRunStatus(assignments: WorkerAssignmentRef[]): RunSummary['status'] {
-    if (assignments.some((item) => item.assignment.status === 'running')) return 'running';
-    if (assignments.some((item) => item.assignment.status === 'paused')) return 'paused';
-    if (assignments.some((item) => item.assignment.status === 'failed')) return 'failed';
-    return 'completed';
-  }
-
-  private draftFromAssignment(assignment: WorkerAssignment): RunDraftInput {
-    return {
-      runName: assignment.assignmentLabel,
-      environment: assignment.environment,
-      virtualUsers: assignment.virtualUsers,
-      durationSeconds: assignment.durationSeconds,
-      rampUpSeconds: assignment.rampUpSeconds,
-      thinkTimeMinMs: assignment.thinkTimeMinMs,
-      thinkTimeMaxMs: assignment.thinkTimeMaxMs,
-      gradualOnline: assignment.gradualOnline,
-      initialOnlineRatio: assignment.initialOnlineRatio,
-      avgSessionDurationSeconds: assignment.avgSessionDurationSeconds,
-      weights: assignment.weights,
-      media: assignment.media
-    };
-  }
-
-  private emptyObjectiveMix(): WorkerObjectiveMix {
-    return {
-      browse: 0,
-      reply_messages: 0,
-      socialize: 0,
-      group_activity: 0,
-      share_file: 0
-    };
-  }
-
-  private emptyActionCounters(): WorkerActionCounters {
-    return {
-      login: 0,
-      open_home: 0,
-      fetch_notifications: 0,
-      fetch_friends: 0,
-      open_private_conversation: 0,
-      send_private_message: 0,
-      open_group_conversation: 0,
-      send_group_message: 0,
-      create_group: 0,
-      add_member: 0,
-      prepare_upload: 0,
-      upload_file: 0,
-      open_notifications: 0,
-      accept_friend_request: 0,
-      logout: 0
-    };
-  }
-
-  private splitVirtualUsers(totalUsers: number, shardCount: number): number[] {
-    const base = Math.floor(totalUsers / shardCount);
-    const remainder = totalUsers % shardCount;
-    return Array.from({ length: shardCount }, (_, index) => base + (index < remainder ? 1 : 0));
-  }
-
-  private partitionAssignedUsers(
-    assignedUsers: LeaseResponse['assignedUsers'],
-    shardSizes: number[]
-  ): LeaseResponse['assignedUsers'][] {
-    const expectedUsers = shardSizes.reduce((sum, shardSize) => sum + shardSize, 0);
-    if (assignedUsers.length !== expectedUsers) {
-      throw new Error(
-        `Expected ${expectedUsers} dedicated staging identities for shard dispatch, but received ${assignedUsers.length}.`
-      );
-    }
-
-    const buckets: LeaseResponse['assignedUsers'][] = [];
-    let cursor = 0;
-    shardSizes.forEach((shardSize) => {
-      buckets.push(assignedUsers.slice(cursor, cursor + shardSize));
-      cursor += shardSize;
+    return buildRunSummary({
+      runId,
+      assignments,
+      leases,
+      plan: this.runPlans.get(runId),
+      round: (value, digits) => this.round(value, digits)
     });
-    return buckets;
-  }
-
-  private toRunEvent(event: WorkerAssignment['recentEvents'][number]): RunEvent {
-    const successActions = new Set(['send_private_message', 'send_group_message', 'upload_file', 'create_group']);
-    const severity: RunEvent['severity'] = event.detail.includes('failed')
-      ? 'warning'
-      : successActions.has(event.action)
-        ? 'success'
-        : event.userId === 'system' && event.action === 'logout'
-          ? 'warning'
-          : 'info';
-    const title = event.userId === 'system'
-      ? event.detail.replace(/^\[[^\]]+\]\s*/, '').split('.').at(0) ?? 'System event'
-      : this.actionTitle(event.action);
-    return { id: event.id, timestamp: event.timestamp, severity, title, detail: event.detail };
-  }
-
-  private actionTitle(action: string): string {
-    return (
-      {
-        login: 'User session started',
-        fetch_notifications: 'Notification check',
-        open_private_conversation: 'Conversation opened',
-        send_private_message: 'Private message sent',
-        open_group_conversation: 'Group thread opened',
-        send_group_message: 'Group message sent',
-        create_group: 'Group created',
-        prepare_upload: 'Upload prepared',
-        upload_file: 'Attachment uploaded',
-        accept_friend_request: 'Friend request accepted',
-        logout: 'User session closed'
-      }[action] ?? 'User action'
-    );
   }
 
   private async buildServices(runs: RunSummary[]): Promise<ServiceScaling[]> {
@@ -1383,63 +931,14 @@ export class ControlPlaneService {
       }
     }
 
-    return this.buildEstimatedServices(runs);
-  }
-
-  private buildEstimatedServices(runs: RunSummary[]): ServiceScaling[] {
-    const demand = this.aggregateDemand(runs.filter((run) => run.status === 'running' || run.status === 'starting'));
-    const pressures = this.serviceDefinitions.map((definition) => ({
-      definition,
-      pressure: this.pressureFor(definition.focus, demand)
-    }));
-
-    return pressures.map(({ definition, pressure }) => {
-      const cpuPercent = Math.round(this.clamp(8 + pressure + Math.random() * 4, 5, 96));
-      const memoryPercent = Math.round(this.clamp(20 + definition.fallbackMinReplicas * 5 + pressure * 0.42 + Math.random() * 4, 12, 92));
-      const targetReplicas = this.clamp(
-        Math.max(definition.fallbackMinReplicas, Math.round(Math.max(cpuPercent / 23, memoryPercent / 32))),
-        definition.fallbackMinReplicas,
-        definition.fallbackMaxReplicas
-      );
-      const currentReplicas = this.clamp(
-        targetReplicas - (cpuPercent > 56 && targetReplicas > definition.fallbackMinReplicas ? 1 : 0),
-        definition.fallbackMinReplicas,
-        definition.fallbackMaxReplicas
-      );
-      return {
-        id: definition.id,
-        name: definition.name,
-        namespace: 'staging',
-        focus: definition.focus,
-        workloadKind: 'Unknown',
-        metricsSource: 'estimated',
-        currentReplicas,
-        targetReplicas,
-        readyReplicas: currentReplicas,
-        podCount: currentReplicas,
-        minReplicas: definition.fallbackMinReplicas,
-        maxReplicas: definition.fallbackMaxReplicas,
-        cpuPercent,
-        cpuTargetPercent: null,
-        cpuUsageMillicores: 0,
-        memoryPercent,
-        memoryUsageMi: 0,
-        latestScaleAt: new Date(Date.now() - (targetReplicas === currentReplicas ? 14 : 3) * 60_000).toISOString(),
-        hpaState: targetReplicas === currentReplicas ? 'Steady' : currentReplicas < targetReplicas ? 'Scaling up' : 'Scaling down',
-        status: targetReplicas !== currentReplicas ? 'scaling' : cpuPercent > 82 || memoryPercent > 82 ? 'attention' : 'healthy',
-        note: `Estimated fallback. ${definition.note}`
-      };
-    });
+    return buildEstimatedServiceScaling(
+      runs,
+      this.serviceDefinitions,
+      (value, min, max) => this.clamp(value, min, max)
+    );
   }
 
   private async buildWorkerNodes(workerSources: WorkerSource[]): Promise<WorkerNode[]> {
-    const grouped = new Map<string, WorkerSource[]>();
-    for (const source of workerSources) {
-      const bucket = grouped.get(source.target.nodeName) ?? [];
-      bucket.push(source);
-      grouped.set(source.target.nodeName, bucket);
-    }
-
     const metricsByNode = new Map<string, WorkerNodeMetric>();
     if (this.workerController.enabled) {
       try {
@@ -1454,137 +953,11 @@ export class ControlPlaneService {
       }
     }
 
-    return Array.from(grouped.entries()).map(([nodeName, sources], index) => {
-      const assignedUsers = sources.reduce((sum, source) => sum + source.runtime.runningUsers, 0);
-      const runningWorkers = sources.reduce((sum, source) => sum + source.runtime.activeAssignments, 0);
-      const podCount = sources.length;
-      const requestsPerSecond = sources.reduce((sum, source) => sum + source.runtime.requestsPerSecond, 0);
-      const messagesPerSecond = sources.reduce((sum, source) => sum + source.runtime.messagesPerSecond, 0);
-      const metric = metricsByNode.get(nodeName);
-      const cpuPercent = metric
-        ? Math.round(this.clamp(metric.cpuPercent, 0, 100))
-        : Math.round(
-            this.clamp(
-              6 + runningWorkers * 12 + assignedUsers * 0.05 + requestsPerSecond * 0.08 + messagesPerSecond * 0.6,
-              4,
-              96
-            )
-          );
-      const memoryPercent = metric
-        ? Math.round(this.clamp(metric.memoryPercent, 0, 100))
-        : Math.round(this.clamp(12 + podCount * 8 + runningWorkers * 9 + assignedUsers * 0.03, 10, 94));
-      const status: WorkerNode['status'] =
-        cpuPercent > 84 || memoryPercent > 84 ? 'saturated' : cpuPercent > 58 ? 'warming' : 'healthy';
-
-      return {
-        id: `worker-node-${index + 1}`,
-        name: nodeName,
-        status,
-        assignedUsers,
-        runningWorkers,
-        metricsSource: metric ? ('cluster' as const) : ('estimated' as const),
-        cpuPercent,
-        cpuUsageMillicores: metric?.cpuUsageMillicores ?? 0,
-        cpuAllocatableMillicores: metric?.cpuAllocatableMillicores ?? 0,
-        memoryPercent,
-        memoryUsageMi: metric?.memoryUsageMi ?? 0,
-        memoryAllocatableMi: metric?.memoryAllocatableMi ?? 0,
-        queueLagMs: Math.round(this.clamp(20 + assignedUsers * 0.35 + runningWorkers * 35, 18, 2400)),
-        podCount,
-        zone: sources[0]?.target.zone ?? nodeName
-      };
-    }).sort((left, right) => right.podCount - left.podCount || left.name.localeCompare(right.name));
-  }
-
-  private buildDashboard(runs: RunSummary[], services: ServiceScaling[], workerSources: WorkerSource[], workerNodes: WorkerNode[]): DashboardStats {
-    const liveRuns = runs.filter(
-      (run) => run.status === 'starting' || run.status === 'running' || run.status === 'paused' || run.status === 'stopping'
+    return buildWorkerNodesFromSources(
+      workerSources,
+      metricsByNode,
+      (value, min, max) => this.clamp(value, min, max)
     );
-    return {
-      activeRuns: liveRuns.length,
-      activeUsers: liveRuns.reduce((sum, run) => sum + run.activeUsers, 0),
-      openSockets: liveRuns.reduce((sum, run) => sum + run.openSockets, 0),
-      avgP95LatencyMs: liveRuns.length === 0 ? 0 : Math.round(liveRuns.reduce((sum, run) => sum + run.p95LatencyMs, 0) / liveRuns.length),
-      workerPods: workerSources.length === 0 ? workerNodes.reduce((sum, node) => sum + node.podCount, 0) : workerSources.length,
-      deployedServices: services.length
-    };
-  }
-
-  private buildScalingEvents(services: ServiceScaling[], runs: RunSummary[], workerSources: WorkerSource[]): ScalingEvent[] {
-    const serviceEvents = services
-      .filter(
-        (service) =>
-          service.currentReplicas !== service.targetReplicas ||
-          service.readyReplicas !== service.targetReplicas ||
-          service.status === 'attention'
-      )
-      .slice(0, 6)
-      .map((service) => ({
-        id: `scale-${service.id}-${service.currentReplicas}-${service.targetReplicas}`,
-        timestamp: service.latestScaleAt,
-        severity: service.currentReplicas < service.targetReplicas ? 'success' as const : 'warning' as const,
-        serviceName: service.name,
-        detail:
-          `${service.metricsSource === 'cluster' ? 'Cluster' : 'Estimated'} metrics: ` +
-          `${service.readyReplicas}/${service.targetReplicas} ready pods, CPU ${service.cpuPercent}%` +
-          `${service.cpuTargetPercent != null ? `/${service.cpuTargetPercent}%` : ''}, memory ${service.memoryPercent}%.`
-      }));
-    const runEvents = runs
-      .filter((run) => run.status === 'starting' || run.status === 'running' || run.status === 'stopping')
-      .slice(0, 4)
-      .map((run) => ({
-        id: `run-${run.id}`,
-        timestamp: run.updatedAt,
-        severity: 'info' as const,
-        serviceName: run.runName,
-        detail: `${run.workerShards} shards, ${run.targetWorkerReplicas} target workers, ${run.activeUsers} active users, ${run.messagesPerSecond} msg/s.`
-      }));
-    const workerEvents = workerSources.slice(0, 4).map((source) => ({
-      id: `worker-${source.target.name}`,
-      timestamp: source.runtime.generatedAt,
-      severity: source.runtime.activeAssignments > 0 ? 'success' as const : 'info' as const,
-      serviceName: source.target.name,
-      detail: `${source.runtime.activeAssignments} shard assignments, ${source.runtime.runningUsers} running users, ${source.runtime.requestsPerSecond} req/s.`
-    }));
-    return [...serviceEvents, ...runEvents, ...workerEvents]
-      .sort((left, right) => right.timestamp.localeCompare(left.timestamp))
-      .slice(0, 12);
-  }
-
-  private aggregateDemand(runs: RunSummary[]) {
-    const totalWeight = runs.reduce((sum, run) => sum + run.weights.browse + run.weights.privateMessage + run.weights.group + run.weights.media + run.weights.social + run.weights.notificationCheck, 0);
-    return {
-      activeUsers: runs.reduce((sum, run) => sum + run.activeUsers, 0),
-      connectedUsers: runs.reduce((sum, run) => sum + run.connectedUsers, 0),
-      requestsPerSecond: runs.reduce((sum, run) => sum + run.requestsPerSecond, 0),
-      messagesPerSecond: runs.reduce((sum, run) => sum + run.messagesPerSecond, 0),
-      uploadsPerMinute: runs.reduce((sum, run) => sum + run.uploadsPerMinute, 0),
-      groupWeight: totalWeight === 0 ? 0 : runs.reduce((sum, run) => sum + run.weights.group, 0) / totalWeight,
-      socialWeight: totalWeight === 0 ? 0 : runs.reduce((sum, run) => sum + run.weights.social, 0) / totalWeight
-    };
-  }
-
-  private pressureFor(focus: ServiceScaling['focus'], demand: ReturnType<ControlPlaneService['aggregateDemand']>): number {
-    switch (focus) {
-      case 'frontend': return demand.requestsPerSecond * 0.12 + demand.activeUsers * 0.03;
-      case 'gateway': return demand.requestsPerSecond * 0.17 + demand.connectedUsers * 0.015;
-      case 'realtime': return demand.connectedUsers * 0.08 + demand.messagesPerSecond * 4.2;
-      case 'chat': return demand.messagesPerSecond * 7.4 + demand.activeUsers * 0.02;
-      case 'group': return demand.groupWeight * demand.activeUsers * 0.05 + demand.messagesPerSecond * 3.2;
-      case 'media': return demand.uploadsPerMinute * 14 + demand.requestsPerSecond * 0.03;
-      case 'notifications': return demand.messagesPerSecond * 4.8 + demand.socialWeight * demand.activeUsers * 0.03;
-      case 'identity': return demand.socialWeight * demand.activeUsers * 0.035 + demand.requestsPerSecond * 0.025;
-    }
-  }
-
-  private pickTopServices(weights: BehaviorWeights): string[] {
-    return [
-      { name: 'ws-manager', value: weights.privateMessage + weights.group },
-      { name: 'chat-service', value: weights.privateMessage + weights.group + weights.media / 2 },
-      { name: 'media-service', value: weights.media },
-      { name: 'notification-service', value: weights.notificationCheck + weights.social },
-      { name: 'user-service', value: weights.social + weights.browse / 2 }
-    ].sort((left, right) => right.value - left.value).slice(0, 3).map((entry) => entry.name);
   }
 
   private async httpJson<T>(url: string, init?: RequestInit, timeoutMs = 10_000): Promise<T> {
