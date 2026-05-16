@@ -126,7 +126,9 @@ export class RunsPageComponent {
     this.selectedRunId.set(runId);
   }
 
-  protected applyPreset(preset: 'balanced' | 'conversation' | 'attachments' | 'validation10k'): void {
+  protected applyPreset(
+    preset: 'balanced' | 'conversation' | 'attachments' | 'verticalMedia' | 'groupOff' | 'validation10k'
+  ): void {
     if (preset === 'balanced') {
       this.form.patchValue({
         runName: 'staging-realistic-01',
@@ -171,6 +173,38 @@ export class RunsPageComponent {
         avgSessionDurationSeconds: 7200,
         weights: { browse: 0, privateMessage: 0, group: 0, media: 0, social: 0, notificationCheck: 0 },
         media: { uploadProbability: 0 }
+      });
+      return;
+    }
+
+    if (preset === 'verticalMedia') {
+      this.form.patchValue({
+        runName: 'staging-vpa-media-recreate',
+        virtualUsers: 360,
+        durationSeconds: 900,
+        rampUpSeconds: 90,
+        thinkTimeMinMs: 120,
+        thinkTimeMaxMs: 650,
+        avgSessionDurationSeconds: 360,
+        gradualOnline: false,
+        weights: { browse: 6, privateMessage: 12, group: 0, media: 64, social: 4, notificationCheck: 14 },
+        media: { uploadProbability: 0.32 }
+      });
+      return;
+    }
+
+    if (preset === 'groupOff') {
+      this.form.patchValue({
+        runName: 'staging-group-off-scale-check',
+        virtualUsers: 600,
+        durationSeconds: 720,
+        rampUpSeconds: 90,
+        thinkTimeMinMs: 150,
+        thinkTimeMaxMs: 850,
+        avgSessionDurationSeconds: 300,
+        gradualOnline: false,
+        weights: { browse: 10, privateMessage: 52, group: 0, media: 4, social: 14, notificationCheck: 20 },
+        media: { uploadProbability: 0.02 }
       });
       return;
     }

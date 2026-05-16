@@ -125,12 +125,30 @@ export interface ServiceScaling {
   cpuPercent: number;
   cpuTargetPercent: number | null;
   cpuUsageMillicores: number;
+  cpuRequestMillicores: number;
   memoryPercent: number;
   memoryUsageMi: number;
+  memoryRequestMi: number;
+  memoryLimitMi: number;
+  vpaMode: string | null;
+  vpaState: 'unavailable' | 'observe' | 'applying' | 'applied';
+  vpaRecommendation: VpaRecommendation | null;
   latestScaleAt: string;
   hpaState: string;
   status: HealthState;
   note: string;
+}
+
+export interface VpaRecommendation {
+  containerName: string;
+  targetCpuMillicores: number;
+  targetMemoryMi: number;
+  lowerBoundCpuMillicores: number;
+  lowerBoundMemoryMi: number;
+  upperBoundCpuMillicores: number;
+  upperBoundMemoryMi: number;
+  uncappedTargetCpuMillicores: number;
+  uncappedTargetMemoryMi: number;
 }
 
 export interface WorkerNode {

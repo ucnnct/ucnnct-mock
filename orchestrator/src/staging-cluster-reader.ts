@@ -1,5 +1,6 @@
 import https from 'node:https';
 
+import type { VpaRecommendation } from './models.js';
 import { KubernetesApiClient } from './kubernetes-api-client.js';
 import { parseCpuToMillicores, parseMemoryToMi, percentOrZero } from './kubernetes-quantity.js';
 import type {
@@ -9,7 +10,9 @@ import type {
   PodList,
   PodMetricsList,
   RolloutList,
-  ServicePodSnapshot
+  ServicePodSnapshot,
+  VerticalPodAutoscalerItem,
+  VerticalPodAutoscalerList
 } from './staging-cluster-types.js';
 
 export type StagingServiceDefinition = {
@@ -45,8 +48,14 @@ export type StagingServiceScaling = {
   cpuPercent: number;
   cpuTargetPercent: number | null;
   cpuUsageMillicores: number;
+  cpuRequestMillicores: number;
   memoryPercent: number;
   memoryUsageMi: number;
+  memoryRequestMi: number;
+  memoryLimitMi: number;
+  vpaMode: string | null;
+  vpaState: 'unavailable' | 'observe' | 'applying' | 'applied';
+  vpaRecommendation: VpaRecommendation | null;
   latestScaleAt: string;
   hpaState: string;
   status: 'healthy' | 'scaling' | 'attention';
@@ -89,17 +98,19 @@ export class StagingClusterReader {
       return null;
     }
 
-    const [hpas, rollouts, deployments, pods, podMetrics] = await Promise.all([
+    const [hpas, rollouts, deployments, pods, podMetrics, vpas] = await Promise.all([
       this.apiClient.getJson<HorizontalPodAutoscalerList>(
         `/apis/autoscaling/v2/namespaces/${this.namespace}/horizontalpodautoscalers`
       ),
       this.apiClient.getJson<RolloutList>(`/apis/argoproj.io/v1alpha1/namespaces/${this.namespace}/rollouts`),
       this.apiClient.getJson<DeploymentList>(`/apis/apps/v1/namespaces/${this.namespace}/deployments`),
       this.apiClient.getJson<PodList>(`/api/v1/namespaces/${this.namespace}/pods`),
-      this.apiClient.getJson<PodMetricsList>(`/apis/metrics.k8s.io/v1beta1/namespaces/${this.namespace}/pods`)
+      this.apiClient.getJson<PodMetricsList>(`/apis/metrics.k8s.io/v1beta1/namespaces/${this.namespace}/pods`),
+      this.listVerticalPodAutoscalers()
     ]);
 
     const hpaByTarget = new Map((hpas.items ?? []).map((hpa) => [hpa.spec?.scaleTargetRef?.name ?? '', hpa]));
+    const vpaByTarget = new Map((vpas.items ?? []).map((vpa) => [vpa.spec?.targetRef?.name ?? vpa.metadata?.name ?? '', vpa]));
     const rolloutByName = new Map((rollouts.items ?? []).map((rollout) => [rollout.metadata?.name ?? '', rollout]));
     const deploymentByName = new Map(
       (deployments.items ?? []).map((deployment) => [deployment.metadata?.name ?? '', deployment])
@@ -153,6 +164,9 @@ export class StagingClusterReader {
           ? 'Deployment'
           : 'Unknown';
       const hpa = hpaByTarget.get(definition.name);
+      const vpa = vpaByTarget.get(definition.name);
+      const vpaMode = vpa?.spec?.updatePolicy?.updateMode ?? null;
+      const vpaRecommendation = this.findVpaRecommendation(vpa, definition.name);
       const podSnapshot = podSnapshots.get(definition.name) ?? {
         podCount: 0,
         readyReplicas: 0,
@@ -187,9 +201,11 @@ export class StagingClusterReader {
       );
       const latestScaleAt =
         this.findLatestTransitionTime(hpa?.status?.conditions) ??
+        this.findLatestTransitionTime(vpa?.status?.conditions) ??
         this.findLatestTransitionTime(workload?.status?.conditions) ??
         new Date().toISOString();
       const hpaState = this.buildHpaState(hpa, currentReplicas, targetReplicas, readyReplicas);
+      const vpaState = this.buildVpaState(vpa, vpaRecommendation, podSnapshot);
       const status: StagingServiceScaling['status'] =
         readyReplicas < targetReplicas || currentReplicas !== targetReplicas
           ? 'scaling'
@@ -200,6 +216,9 @@ export class StagingClusterReader {
       const scopeText = hpa
         ? `HPA CPU ${cpuPercent}%/${cpuTargetPercent ?? 'n/a'}%, RAM ${memoryPercent}% of limit, ready ${readyReplicas}/${targetReplicas} pods.`
         : `No HPA configured, RAM ${memoryPercent}% of limit, ready ${readyReplicas}/${targetReplicas} pods.`;
+      const vpaText = vpa
+        ? `VPA ${vpaMode ?? 'default'} is ${vpaState}${this.formatVpaRecommendation(vpaRecommendation)}.`
+        : 'No VPA configured.';
 
       return {
         id: definition.id,
@@ -217,14 +236,30 @@ export class StagingClusterReader {
         cpuPercent,
         cpuTargetPercent,
         cpuUsageMillicores: Math.round(podSnapshot.cpuUsageMillicores),
+        cpuRequestMillicores: Math.round(podSnapshot.cpuRequestsMillicores),
         memoryPercent,
         memoryUsageMi: Math.round(podSnapshot.memoryUsageMi),
+        memoryRequestMi: Math.round(podSnapshot.memoryRequestsMi),
+        memoryLimitMi: Math.round(podSnapshot.memoryLimitsMi),
+        vpaMode,
+        vpaState,
+        vpaRecommendation,
         latestScaleAt,
         hpaState,
         status,
-        note: `${scopeText} ${definition.note}`
+        note: `${scopeText} ${vpaText} ${definition.note}`
       };
     });
+  }
+
+  private async listVerticalPodAutoscalers(): Promise<VerticalPodAutoscalerList> {
+    try {
+      return await this.apiClient.getJson<VerticalPodAutoscalerList>(
+        `/apis/autoscaling.k8s.io/v1/namespaces/${this.namespace}/verticalpodautoscalers`
+      );
+    } catch {
+      return { items: [] };
+    }
   }
 
   private buildHpaState(
@@ -264,6 +299,70 @@ export class StagingClusterReader {
         item.type === 'Resource' && item.resource?.name === 'cpu'
     );
     return metric?.resource?.current?.averageUtilization ?? null;
+  }
+
+  private findVpaRecommendation(
+    vpa: VerticalPodAutoscalerItem | undefined,
+    serviceName: string
+  ): VpaRecommendation | null {
+    const recommendation = (vpa?.status?.recommendation?.containerRecommendations ?? []).find(
+      (item) => item.containerName === serviceName
+    ) ?? vpa?.status?.recommendation?.containerRecommendations?.[0];
+
+    if (!recommendation?.containerName) {
+      return null;
+    }
+
+    return {
+      containerName: recommendation.containerName,
+      targetCpuMillicores: Math.round(parseCpuToMillicores(recommendation.target?.cpu)),
+      targetMemoryMi: Math.round(parseMemoryToMi(recommendation.target?.memory)),
+      lowerBoundCpuMillicores: Math.round(parseCpuToMillicores(recommendation.lowerBound?.cpu)),
+      lowerBoundMemoryMi: Math.round(parseMemoryToMi(recommendation.lowerBound?.memory)),
+      upperBoundCpuMillicores: Math.round(parseCpuToMillicores(recommendation.upperBound?.cpu)),
+      upperBoundMemoryMi: Math.round(parseMemoryToMi(recommendation.upperBound?.memory)),
+      uncappedTargetCpuMillicores: Math.round(parseCpuToMillicores(recommendation.uncappedTarget?.cpu)),
+      uncappedTargetMemoryMi: Math.round(parseMemoryToMi(recommendation.uncappedTarget?.memory))
+    };
+  }
+
+  private buildVpaState(
+    vpa: VerticalPodAutoscalerItem | undefined,
+    recommendation: VpaRecommendation | null,
+    podSnapshot: ServicePodSnapshot
+  ): StagingServiceScaling['vpaState'] {
+    if (!vpa) {
+      return 'unavailable';
+    }
+
+    const mode = vpa.spec?.updatePolicy?.updateMode ?? 'Recreate';
+    if (mode === 'Off') {
+      return 'observe';
+    }
+
+    if (!recommendation || podSnapshot.podCount === 0) {
+      return 'applying';
+    }
+
+    const averageCpuRequest = podSnapshot.cpuRequestsMillicores / podSnapshot.podCount;
+    const averageMemoryRequest = podSnapshot.memoryRequestsMi / podSnapshot.podCount;
+    const cpuApplied = this.isCloseToRecommendation(averageCpuRequest, recommendation.targetCpuMillicores);
+    const memoryApplied = this.isCloseToRecommendation(averageMemoryRequest, recommendation.targetMemoryMi);
+    return cpuApplied && memoryApplied ? 'applied' : 'applying';
+  }
+
+  private isCloseToRecommendation(current: number, recommended: number): boolean {
+    if (recommended <= 0) {
+      return true;
+    }
+    return Math.abs(current - recommended) / recommended <= 0.15;
+  }
+
+  private formatVpaRecommendation(recommendation: VpaRecommendation | null): string {
+    if (!recommendation) {
+      return '';
+    }
+    return `, target ${recommendation.targetCpuMillicores}m CPU and ${recommendation.targetMemoryMi}Mi RAM`;
   }
 
   private findLatestTransitionTime(

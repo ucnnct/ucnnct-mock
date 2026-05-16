@@ -83,6 +83,52 @@ export type HorizontalPodAutoscalerList = {
 
 export type HorizontalPodAutoscalerItem = NonNullable<HorizontalPodAutoscalerList['items']>[number];
 
+export type VerticalPodAutoscalerList = {
+  items?: Array<{
+    metadata?: ObjectMeta;
+    spec?: {
+      targetRef?: {
+        apiVersion?: string;
+        kind?: string;
+        name?: string;
+      };
+      updatePolicy?: {
+        updateMode?: string;
+      };
+    };
+    status?: {
+      recommendation?: {
+        containerRecommendations?: Array<{
+          containerName?: string;
+          target?: {
+            cpu?: string;
+            memory?: string;
+          };
+          lowerBound?: {
+            cpu?: string;
+            memory?: string;
+          };
+          upperBound?: {
+            cpu?: string;
+            memory?: string;
+          };
+          uncappedTarget?: {
+            cpu?: string;
+            memory?: string;
+          };
+        }>;
+      };
+      conditions?: Array<{
+        type?: string;
+        status?: string;
+        lastTransitionTime?: string;
+      }>;
+    };
+  }>;
+};
+
+export type VerticalPodAutoscalerItem = NonNullable<VerticalPodAutoscalerList['items']>[number];
+
 export type PodList = {
   items?: Array<{
     metadata?: ObjectMeta;

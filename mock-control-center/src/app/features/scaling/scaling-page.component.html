@@ -5,7 +5,8 @@
       <h2>Real replica movement, HPA posture and autoscaled worker pressure</h2>
       <p class="muted">
         This view now reads real Kubernetes data from the staging cluster for service replicas, HPA posture and pod
-        CPU and memory usage. Worker node CPU and memory now come from the mock cluster itself when metrics are available.
+        CPU and memory usage, plus VPA recommendation and application state when vertical autoscaling is enabled.
+        Worker node CPU and memory now come from the mock cluster itself when metrics are available.
       </p>
     </div>
   </article>
@@ -31,7 +32,87 @@
       <span class="metric-label">Hot services</span>
       <div class="metric-value">{{ store.hottestServices().length }}</div>
     </article>
+    <article class="metric-card">
+      <span class="metric-label">VPA demo mode</span>
+      <div class="metric-value">{{ vpaDemoServices().length }}</div>
+    </article>
+    <article class="metric-card">
+      <span class="metric-label">VPA observed</span>
+      <div class="metric-value">{{ vpaObservedServices().length }}</div>
+    </article>
   </section>
+
+  <article class="panel vertical-panel">
+    <div class="panel-header">
+      <div>
+        <span class="eyebrow">Vertical scaling</span>
+        <h3>Pod resource recommendations</h3>
+      </div>
+      <span class="badge badge--warning">{{ vpaRecommendedServices().length }} recommendations</span>
+    </div>
+
+    <div class="vpa-strip">
+      <article class="vpa-card" *ngFor="let service of store.services()">
+        <div class="service-topline">
+          <div>
+            <strong>{{ service.name }}</strong>
+            <small class="muted">{{ service.vpaRecommendation?.containerName || service.focus }}</small>
+          </div>
+          <span
+            class="badge"
+            [class.badge--success]="service.vpaState === 'applied'"
+            [class.badge--warning]="service.vpaState === 'applying' || service.vpaState === 'observe'"
+          >
+            {{ vpaBadgeLabel(service) }}
+          </span>
+        </div>
+
+        <div class="resource-comparison">
+          <div class="resource-row">
+            <div class="meter-label">
+              <span>CPU request</span>
+              <strong>
+                {{ service.cpuRequestMillicores }}m
+                <ng-container *ngIf="service.vpaRecommendation">
+                  -> {{ service.vpaRecommendation.targetCpuMillicores }}m
+                </ng-container>
+              </strong>
+            </div>
+            <div class="meter-track">
+              <div
+                class="meter-fill"
+                [style.width.%]="recommendationPercent(service.cpuRequestMillicores, service.vpaRecommendation?.targetCpuMillicores)"
+              ></div>
+            </div>
+          </div>
+
+          <div class="resource-row">
+            <div class="meter-label">
+              <span>Memory request</span>
+              <strong>
+                {{ service.memoryRequestMi }}Mi
+                <ng-container *ngIf="service.vpaRecommendation">
+                  -> {{ service.vpaRecommendation.targetMemoryMi }}Mi
+                </ng-container>
+              </strong>
+            </div>
+            <div class="meter-track meter-track--memory">
+              <div
+                class="meter-fill meter-fill--memory"
+                [style.width.%]="recommendationPercent(service.memoryRequestMi, service.vpaRecommendation?.targetMemoryMi)"
+              ></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="service-bottomline">
+          <span>{{ service.vpaState }}</span>
+          <span>{{ service.memoryLimitMi }}Mi limit</span>
+          <span>{{ service.latestScaleAt | date:'short' }}</span>
+        </div>
+      </article>
+    </div>
+  </article>
 
   <article class="panel services-panel">
     <div class="panel-header">
@@ -48,14 +129,23 @@
             <strong>{{ service.name }}</strong>
             <small class="muted">{{ service.namespace }} - {{ service.focus }} - {{ service.workloadKind }}</small>
           </div>
-          <span
-            class="badge"
-            [class.badge--success]="service.status === 'healthy'"
-            [class.badge--warning]="service.status === 'scaling'"
-            [class.badge--danger]="service.status === 'attention'"
-          >
-            {{ service.hpaState }}
-          </span>
+          <div class="badge-strip">
+            <span
+              class="badge"
+              [class.badge--success]="service.status === 'healthy'"
+              [class.badge--warning]="service.status === 'scaling'"
+              [class.badge--danger]="service.status === 'attention'"
+            >
+              {{ service.hpaState }}
+            </span>
+            <span
+              class="badge"
+              [class.badge--success]="service.vpaState === 'applied'"
+              [class.badge--warning]="service.vpaState === 'applying' || service.vpaState === 'observe'"
+            >
+              {{ vpaBadgeLabel(service) }}
+            </span>
+          </div>
         </div>
 
         <div class="replica-summary">
@@ -103,7 +193,9 @@
 
         <div class="service-bottomline">
           <span>{{ service.cpuUsageMillicores }}m CPU</span>
+          <span>{{ service.cpuRequestMillicores }}m requested</span>
           <span>{{ service.memoryUsageMi }}Mi memory</span>
+          <span>{{ service.memoryRequestMi }}Mi requested</span>
           <span>{{ service.latestScaleAt | date:'short' }}</span>
         </div>
 

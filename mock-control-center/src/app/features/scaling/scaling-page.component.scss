@@ -1,4 +1,5 @@
 .hero,
+.vertical-panel,
 .services-panel,
 .worker-panel,
 .events-panel {
@@ -6,10 +7,15 @@
 }
 
 .service-grid,
+.vpa-strip,
 .worker-list,
 .event-list {
   display: grid;
   gap: 1rem;
+}
+
+.vpa-strip {
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
 }
 
 .service-grid {
@@ -17,11 +23,12 @@
 }
 
 .service-card,
+.vpa-card,
 .worker-card {
   display: grid;
   gap: 0.9rem;
   padding: 1rem;
-  border-radius: 18px;
+  border-radius: 8px;
   border: 1px solid rgba(219, 230, 241, 0.95);
   background: rgba(255, 255, 255, 0.84);
 }
@@ -32,6 +39,14 @@
   display: flex;
   justify-content: space-between;
   gap: 1rem;
+}
+
+.badge-strip {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 0.4rem;
+  flex-wrap: wrap;
 }
 
 .replica-summary {
@@ -45,6 +60,16 @@
 }
 
 .meter {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.resource-comparison {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.resource-row {
   display: grid;
   gap: 0.35rem;
 }
