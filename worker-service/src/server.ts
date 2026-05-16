@@ -1,7 +1,7 @@
 import cors from 'cors';
 import express from 'express';
 import { z } from 'zod';
-import { WorkerEngine } from './worker-engine.js';
+import { WorkerEngine } from './worker/engine.js';
 
 const app = express();
 const port = Number(process.env.PORT ?? 7400);

@@ -2,7 +2,6 @@ package cc.uconnect.mockuser;
 
 import jakarta.annotation.PreDestroy;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -10,7 +9,6 @@ import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
@@ -32,7 +30,7 @@ public class MockUserRegistry {
   private final String defaultPasswordHint;
   private final Map<String, MockUserEntity> users = new LinkedHashMap<>();
   private final Map<String, LeaseEntity> leases = new LinkedHashMap<>();
-  private final List<FixtureProfile> fixtures = new ArrayList<>();
+  private final List<FixtureProfile> fixtures;
   private final ReentrantLock provisioningLock = new ReentrantLock(true);
   private final ExecutorService warmupExecutor;
   private final AtomicBoolean warmupInProgress = new AtomicBoolean(false);
@@ -48,13 +46,13 @@ public class MockUserRegistry {
     this.expansionBuffer = environment.getProperty("mock.users.expansion-buffer", Integer.class, 24);
     this.warmupStep = environment.getProperty("mock.users.warmup-step", Integer.class, 500);
     this.defaultPasswordHint = environment.getProperty("staging.identity.default-password");
+    this.fixtures = MockUserFixtures.build(initialUserCount);
     this.warmupExecutor = Executors.newSingleThreadExecutor(new WarmupThreadFactory());
     if (!provisioner.isEnabled()) {
       throw new IllegalStateException(
           "mock-user-service now requires staging-backed identities. Set STAGING_IDENTITY_PROVISION_ENABLED=true."
       );
     }
-    seedFixtures();
   }
 
   public synchronized MockUserRuntime runtime() {
@@ -84,7 +82,7 @@ public class MockUserRegistry {
   public synchronized List<LeaseSnapshot> leases() {
     return leases.values().stream()
         .sorted(Comparator.comparing(LeaseEntity::issuedAt).reversed())
-        .map(this::toLeaseSnapshot)
+        .map(MockUserLeaseMapper::toLeaseSnapshot)
         .toList();
   }
 
@@ -95,11 +93,11 @@ public class MockUserRegistry {
     }
 
     return new LeaseResponse(
-        toLeaseSnapshot(lease),
-        lease.userIds.stream()
+        MockUserLeaseMapper.toLeaseSnapshot(lease),
+        lease.userIds().stream()
             .map(users::get)
             .filter(java.util.Objects::nonNull)
-            .map(this::toLeasedUser)
+            .map(MockUserLeaseMapper::toLeasedUser)
             .toList()
     );
   }
@@ -122,23 +120,22 @@ public class MockUserRegistry {
 
       String leaseId = "lease-" + java.util.UUID.randomUUID().toString().substring(0, 8);
       Instant issuedAt = Instant.now();
-      assignedUsers.forEach((user) -> user.leaseId = leaseId);
+      assignedUsers.forEach((user) -> user.assignLease(leaseId));
 
-      LeaseEntity lease = new LeaseEntity(
+      LeaseEntity lease = LeaseEntity.active(
           leaseId,
           request.runId(),
           request.runName(),
           request.requestedUsers(),
-          assignedUsers.stream().map((user) -> user.id).toList(),
-          issuedAt,
-          "active"
+          assignedUsers.stream().map(MockUserEntity::id).toList(),
+          issuedAt
       );
       leases.put(leaseId, lease);
       triggerBackgroundWarmup();
 
       return new LeaseResponse(
-          toLeaseSnapshot(lease),
-          assignedUsers.stream().map(this::toLeasedUser).toList()
+          MockUserLeaseMapper.toLeaseSnapshot(lease),
+          assignedUsers.stream().map(MockUserLeaseMapper::toLeasedUser).toList()
       );
     }
   }
@@ -149,26 +146,26 @@ public class MockUserRegistry {
       throw new NoSuchElementException("Lease " + leaseId + " was not found.");
     }
 
-    releaseUsersForLease(lease.id);
-    lease.state = "released";
-    return toLeaseSnapshot(lease);
+    releaseUsersForLease(lease.id());
+    lease.release();
+    return MockUserLeaseMapper.toLeaseSnapshot(lease);
   }
 
   public synchronized LeaseSnapshot releaseRun(String runId) {
     LeaseEntity lease = leases.values().stream()
-        .filter((candidate) -> candidate.runId.equals(runId))
+        .filter((candidate) -> candidate.runId().equals(runId))
         .max(Comparator.comparing(LeaseEntity::issuedAt))
         .orElseThrow(() -> new NoSuchElementException("No lease found for run " + runId + "."));
 
-    releaseUsersForLease(lease.id);
-    lease.state = "released";
-    return toLeaseSnapshot(lease);
+    releaseUsersForLease(lease.id());
+    lease.release();
+    return MockUserLeaseMapper.toLeaseSnapshot(lease);
   }
 
   private void releaseUsersForLease(String leaseId) {
     users.values().stream()
-        .filter((user) -> leaseId.equals(user.leaseId))
-        .forEach((user) -> user.leaseId = null);
+        .filter((user) -> leaseId.equals(user.leaseId()))
+        .forEach(MockUserEntity::releaseLease);
   }
 
   private void ensureAvailableUsers(int requestedUsers) {
@@ -204,13 +201,7 @@ public class MockUserRegistry {
       List<ProvisionedMockUser> provisionedUsers = provisioner.provisionRange(startIndex, desiredTotal);
       synchronized (this) {
         for (ProvisionedMockUser user : provisionedUsers) {
-          users.putIfAbsent(user.id(), new MockUserEntity(
-              user.id(),
-              user.username(),
-              user.displayName(),
-              user.email(),
-              user.password()
-          ));
+          users.putIfAbsent(user.id(), MockUserEntity.from(user));
         }
       }
     } finally {
@@ -232,51 +223,12 @@ public class MockUserRegistry {
       List<ProvisionedMockUser> discoveredUsers = provisioner.discoverExistingUsers(targetUserCount);
       synchronized (this) {
         for (ProvisionedMockUser user : discoveredUsers) {
-          users.putIfAbsent(user.id(), new MockUserEntity(
-              user.id(),
-              user.username(),
-              user.displayName(),
-              user.email(),
-              user.password()
-          ));
+          users.putIfAbsent(user.id(), MockUserEntity.from(user));
         }
       }
     } finally {
       provisioningLock.unlock();
     }
-  }
-
-  private void seedFixtures() {
-    fixtures.add(new FixtureProfile(
-        "fixture-campus",
-        "Campus graph",
-        "Provisioned staging users ready for mixed browse and notification pressure.",
-        Math.max(initialUserCount, 32),
-        16,
-        Math.max(initialUserCount * 3, 96),
-        0,
-        "ready"
-    ));
-    fixtures.add(new FixtureProfile(
-        "fixture-societies",
-        "Societies and clubs",
-        "Group-heavy staging identities prepared for group creation and member churn.",
-        Math.max(initialUserCount / 2, 24),
-        12,
-        Math.max(initialUserCount * 2, 64),
-        24,
-        "ready"
-    ));
-    fixtures.add(new FixtureProfile(
-        "fixture-media",
-        "Media playground",
-        "Attachment-focused identities used to stress uploads and file-linked messages.",
-        Math.max(initialUserCount / 3, 16),
-        6,
-        Math.max(initialUserCount, 40),
-        Math.max(initialUserCount * 2, 80),
-        "ready"
-    ));
   }
 
   private List<MockUserEntity> availableUsers(int requestedUsers) {
@@ -357,7 +309,7 @@ public class MockUserRegistry {
 
   private synchronized void assertNoActiveLeaseForRun(String runId) {
     leases.values().stream()
-        .filter((lease) -> lease.runId.equals(runId) && lease.isActive())
+        .filter((lease) -> lease.runId().equals(runId) && lease.isActive())
         .findFirst()
         .ifPresent((lease) -> {
           throw new IllegalStateException("An active lease already exists for run " + runId + ".");
@@ -373,96 +325,4 @@ public class MockUserRegistry {
     }
   }
 
-  private LeaseSnapshot toLeaseSnapshot(LeaseEntity lease) {
-    return new LeaseSnapshot(
-        lease.id,
-        lease.runId,
-        lease.runName,
-        lease.users,
-        lease.issuedAt.toString(),
-        lease.state
-    );
-  }
-
-  private LeasedMockUser toLeasedUser(MockUserEntity user) {
-    return new LeasedMockUser(
-        user.id,
-        user.username,
-        user.displayName,
-        user.email,
-        user.password
-    );
-  }
-
-  private static final class MockUserEntity {
-    private final String id;
-    private final String username;
-    private final String displayName;
-    private final String email;
-    private final String password;
-    private String leaseId;
-
-    private MockUserEntity(
-        String id,
-        String username,
-        String displayName,
-        String email,
-        String password
-    ) {
-      this.id = id;
-      this.username = username;
-      this.displayName = displayName;
-      this.email = email;
-      this.password = password;
-    }
-
-    private boolean isLeased() {
-      return leaseId != null;
-    }
-  }
-
-  private static final class LeaseEntity {
-    private final String id;
-    private final String runId;
-    private final String runName;
-    private final int users;
-    private final List<String> userIds;
-    private final Instant issuedAt;
-    private String state;
-
-    private LeaseEntity(
-        String id,
-        String runId,
-        String runName,
-        int users,
-        List<String> userIds,
-        Instant issuedAt,
-        String state
-    ) {
-      this.id = id;
-      this.runId = runId;
-      this.runName = runName;
-      this.users = users;
-      this.userIds = List.copyOf(userIds);
-      this.issuedAt = issuedAt;
-      this.state = state;
-    }
-
-    private boolean isActive() {
-      return "active".equals(state);
-    }
-
-    private Instant issuedAt() {
-      return issuedAt;
-    }
-  }
-
-  private static final class WarmupThreadFactory implements ThreadFactory {
-    @Override
-    public Thread newThread(Runnable runnable) {
-      Thread thread = new Thread(runnable, "mock-user-warmup");
-      thread.setDaemon(true);
-      return thread;
-    }
-  }
 }

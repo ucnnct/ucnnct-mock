@@ -1,6 +1,9 @@
 import fs from 'node:fs';
 import https from 'node:https';
 
+import { KubernetesApiClient } from './kubernetes-api-client.js';
+import { parseCpuToMillicores, parseMemoryToMi } from './kubernetes-quantity.js';
+
 export type WorkerPodTarget = {
   name: string;
   podIp: string;
@@ -70,9 +73,7 @@ export class KubernetesWorkerController {
   readonly minReplicas = Number(process.env.WORKER_MIN_REPLICAS ?? 2);
   readonly maxReplicas = Number(process.env.WORKER_MAX_REPLICAS ?? 40);
 
-  private readonly baseUrl: string | null;
-  private readonly token: string | null;
-  private readonly agent: https.Agent | null;
+  private readonly apiClient: KubernetesApiClient;
 
   constructor() {
     const tokenPath = '/var/run/secrets/kubernetes.io/serviceaccount/token';
@@ -81,22 +82,28 @@ export class KubernetesWorkerController {
     const port = process.env.KUBERNETES_SERVICE_PORT_HTTPS ?? '443';
 
     if (!host || !fs.existsSync(tokenPath) || !fs.existsSync(caPath)) {
-      this.baseUrl = null;
-      this.token = null;
-      this.agent = null;
+      this.apiClient = new KubernetesApiClient(
+        null,
+        null,
+        null,
+        'Kubernetes worker controller is not available.'
+      );
       return;
     }
 
-    this.baseUrl = `https://${host}:${port}`;
-    this.token = fs.readFileSync(tokenPath, 'utf8').trim();
-    this.agent = new https.Agent({
+    this.apiClient = new KubernetesApiClient(
+      `https://${host}:${port}`,
+      fs.readFileSync(tokenPath, 'utf8').trim(),
+      new https.Agent({
       ca: fs.readFileSync(caPath, 'utf8'),
       keepAlive: true
-    });
+      }),
+      'Kubernetes worker controller is not available.'
+    );
   }
 
   get enabled(): boolean {
-    return this.baseUrl !== null && this.token !== null && this.agent !== null;
+    return this.apiClient.enabled;
   }
 
   async listWorkerPods(): Promise<WorkerPodTarget[]> {
@@ -104,8 +111,7 @@ export class KubernetesWorkerController {
       return [];
     }
 
-    const payload = await this.requestJson<PodListResponse>(
-      'GET',
+    const payload = await this.apiClient.getJson<PodListResponse>(
       `/api/v1/namespaces/${this.namespace}/pods?labelSelector=${encodeURIComponent(this.labelSelector)}`
     );
 
@@ -143,8 +149,7 @@ export class KubernetesWorkerController {
     }
 
     const desiredReplicas = this.clamp(replicas, this.minReplicas, this.maxReplicas);
-    await this.requestJson(
-      'PATCH',
+    await this.apiClient.patchJson(
       `/apis/apps/v1/namespaces/${this.namespace}/deployments/${this.deploymentName}/scale`,
       {
         spec: {
@@ -163,8 +168,8 @@ export class KubernetesWorkerController {
     }
 
     const [nodesPayload, metricsPayload] = await Promise.all([
-      this.requestJson<NodeListResponse>('GET', '/api/v1/nodes'),
-      this.requestJson<NodeMetricsListResponse>('GET', '/apis/metrics.k8s.io/v1beta1/nodes')
+      this.apiClient.getJson<NodeListResponse>('/api/v1/nodes'),
+      this.apiClient.getJson<NodeMetricsListResponse>('/apis/metrics.k8s.io/v1beta1/nodes')
     ]);
 
     const usageByNode = new Map(
@@ -177,8 +182,8 @@ export class KubernetesWorkerController {
           return [
             name,
             {
-              cpuUsageMillicores: this.parseCpuToMillicores(item.usage?.cpu),
-              memoryUsageMi: this.parseMemoryToMi(item.usage?.memory)
+              cpuUsageMillicores: Math.round(parseCpuToMillicores(item.usage?.cpu)),
+              memoryUsageMi: Math.round(parseMemoryToMi(item.usage?.memory))
             }
           ] as const;
         })
@@ -193,8 +198,10 @@ export class KubernetesWorkerController {
         }
 
         const zone = item.metadata?.labels?.['topology.kubernetes.io/zone'] ?? name;
-        const cpuAllocatableMillicores = this.parseCpuToMillicores(item.status?.allocatable?.cpu);
-        const memoryAllocatableMi = this.parseMemoryToMi(item.status?.allocatable?.memory);
+        const cpuAllocatableMillicores = Math.round(
+          parseCpuToMillicores(item.status?.allocatable?.cpu)
+        );
+        const memoryAllocatableMi = Math.round(parseMemoryToMi(item.status?.allocatable?.memory));
         const usage = usageByNode.get(name);
         const cpuUsageMillicores = usage?.cpuUsageMillicores ?? 0;
         const memoryUsageMi = usage?.memoryUsageMi ?? 0;
@@ -262,8 +269,7 @@ export class KubernetesWorkerController {
 
   private async patchWorkerHpa(minReplicas: number, maxReplicas: number): Promise<void> {
     try {
-      await this.requestJson(
-        'PATCH',
+      await this.apiClient.patchJson(
         `/apis/autoscaling/v2/namespaces/${this.namespace}/horizontalpodautoscalers/${this.hpaName}`,
         {
           spec: {
@@ -283,123 +289,8 @@ export class KubernetesWorkerController {
     }
   }
 
-  private async requestJson<T>(
-    method: 'GET' | 'PATCH',
-    path: string,
-    body?: unknown,
-    headers: Record<string, string> = {}
-  ): Promise<T> {
-    if (!this.enabled || !this.baseUrl || !this.token || !this.agent) {
-      throw new Error('Kubernetes worker controller is not available.');
-    }
-
-    const payload = body == null ? undefined : JSON.stringify(body);
-
-    return new Promise<T>((resolve, reject) => {
-      const request = https.request(
-        `${this.baseUrl}${path}`,
-        {
-          method,
-          agent: this.agent ?? undefined,
-          headers: {
-            Accept: 'application/json',
-            Authorization: `Bearer ${this.token}`,
-            ...(payload
-              ? {
-                  'Content-Length': Buffer.byteLength(payload),
-                  'Content-Type': 'application/json'
-                }
-              : {}),
-            ...headers
-          }
-        },
-        (response) => {
-          const chunks: Buffer[] = [];
-          response.on('data', (chunk) => {
-            chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-          });
-          response.on('end', () => {
-            const raw = Buffer.concat(chunks).toString('utf8');
-            if ((response.statusCode ?? 500) >= 400) {
-              reject(
-                new Error(
-                  `Kubernetes API ${method} ${path} failed with ${response.statusCode}: ${raw}`
-                )
-              );
-              return;
-            }
-
-            if (!raw) {
-              resolve({} as T);
-              return;
-            }
-
-            try {
-              resolve(JSON.parse(raw) as T);
-            } catch (error) {
-              reject(error);
-            }
-          });
-        }
-      );
-
-      request.on('error', reject);
-
-      if (payload) {
-        request.write(payload);
-      }
-
-      request.end();
-    });
-  }
-
   private clamp(value: number, min: number, max: number): number {
     return Math.min(Math.max(value, min), max);
   }
 
-  private parseCpuToMillicores(value: string | undefined): number {
-    if (!value) {
-      return 0;
-    }
-
-    if (value.endsWith('n')) {
-      return Math.round(Number.parseFloat(value.slice(0, -1)) / 1_000_000);
-    }
-    if (value.endsWith('u')) {
-      return Math.round(Number.parseFloat(value.slice(0, -1)) / 1_000);
-    }
-    if (value.endsWith('m')) {
-      return Math.round(Number.parseFloat(value.slice(0, -1)));
-    }
-
-    return Math.round(Number.parseFloat(value) * 1000);
-  }
-
-  private parseMemoryToMi(value: string | undefined): number {
-    if (!value) {
-      return 0;
-    }
-
-    const match = /^([0-9]+(?:\.[0-9]+)?)([A-Za-z]+)?$/.exec(value);
-    if (!match) {
-      return 0;
-    }
-
-    const amount = Number.parseFloat(match[1] ?? '0');
-    const unit = match[2] ?? '';
-    const factors: Record<string, number> = {
-      Ki: 1 / 1024,
-      Mi: 1,
-      Gi: 1024,
-      Ti: 1024 * 1024,
-      Pi: 1024 * 1024 * 1024,
-      Ei: 1024 * 1024 * 1024 * 1024,
-      K: 1000 / (1024 * 1024),
-      M: 1000 * 1000 / (1024 * 1024),
-      G: 1000 * 1000 * 1000 / (1024 * 1024),
-      T: 1000 * 1000 * 1000 * 1000 / (1024 * 1024)
-    };
-
-    return Math.round(amount * (factors[unit] ?? 1 / (1024 * 1024)));
-  }
 }

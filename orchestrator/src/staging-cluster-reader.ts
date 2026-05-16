@@ -1,5 +1,17 @@
 import https from 'node:https';
 
+import { KubernetesApiClient } from './kubernetes-api-client.js';
+import { parseCpuToMillicores, parseMemoryToMi, percentOrZero } from './kubernetes-quantity.js';
+import type {
+  DeploymentList,
+  HorizontalPodAutoscalerItem,
+  HorizontalPodAutoscalerList,
+  PodList,
+  PodMetricsList,
+  RolloutList,
+  ServicePodSnapshot
+} from './staging-cluster-types.js';
+
 export type StagingServiceDefinition = {
   id: string;
   name: string;
@@ -41,173 +53,33 @@ export type StagingServiceScaling = {
   note: string;
 };
 
-type ObjectMeta = {
-  name?: string;
-  labels?: Record<string, string>;
-};
-
-type RolloutLike = {
-  metadata?: ObjectMeta;
-  spec?: {
-    replicas?: number;
-  };
-  status?: {
-    replicas?: number;
-    availableReplicas?: number;
-    readyReplicas?: number;
-    updatedReplicas?: number;
-    currentPodHash?: string;
-    conditions?: Array<{
-      type?: string;
-      status?: string;
-      lastTransitionTime?: string;
-    }>;
-  };
-};
-
-type DeploymentLike = {
-  metadata?: ObjectMeta;
-  spec?: {
-    replicas?: number;
-  };
-  status?: {
-    replicas?: number;
-    availableReplicas?: number;
-    readyReplicas?: number;
-    conditions?: Array<{
-      type?: string;
-      status?: string;
-      lastTransitionTime?: string;
-    }>;
-  };
-};
-
-type HorizontalPodAutoscalerList = {
-  items?: Array<{
-    metadata?: ObjectMeta;
-    spec?: {
-      minReplicas?: number;
-      maxReplicas?: number;
-      scaleTargetRef?: {
-        kind?: string;
-        name?: string;
-      };
-      metrics?: Array<{
-        type?: string;
-        resource?: {
-          name?: string;
-          target?: {
-            type?: string;
-            averageUtilization?: number;
-          };
-        };
-      }>;
-    };
-    status?: {
-      currentReplicas?: number;
-      desiredReplicas?: number;
-      currentMetrics?: Array<{
-        type?: string;
-        resource?: {
-          name?: string;
-          current?: {
-            averageUtilization?: number;
-          };
-        };
-      }>;
-      conditions?: Array<{
-        type?: string;
-        status?: string;
-        lastTransitionTime?: string;
-      }>;
-    };
-  }>;
-};
-
-type HorizontalPodAutoscalerItem = NonNullable<HorizontalPodAutoscalerList['items']>[number];
-
-type PodList = {
-  items?: Array<{
-    metadata?: ObjectMeta;
-    spec?: {
-      nodeName?: string;
-      containers?: Array<{
-        name?: string;
-        resources?: {
-          requests?: {
-            cpu?: string;
-            memory?: string;
-          };
-          limits?: {
-            cpu?: string;
-            memory?: string;
-          };
-        };
-      }>;
-    };
-    status?: {
-      phase?: string;
-      conditions?: Array<{
-        type?: string;
-        status?: string;
-      }>;
-    };
-  }>;
-};
-
-type PodMetricsList = {
-  items?: Array<{
-    metadata?: ObjectMeta;
-    containers?: Array<{
-      name?: string;
-      usage?: {
-        cpu?: string;
-        memory?: string;
-      };
-    }>;
-  }>;
-};
-
-type RolloutList = {
-  items?: RolloutLike[];
-};
-
-type DeploymentList = {
-  items?: DeploymentLike[];
-};
-
-type ServicePodSnapshot = {
-  podCount: number;
-  readyReplicas: number;
-  cpuRequestsMillicores: number;
-  cpuUsageMillicores: number;
-  memoryRequestsMi: number;
-  memoryLimitsMi: number;
-  memoryUsageMi: number;
-};
-
 export class StagingClusterReader {
   readonly namespace = process.env.STAGING_CLUSTER_NAMESPACE ?? 'staging';
 
-  private readonly baseUrl = process.env.STAGING_CLUSTER_API_URL ?? null;
-  private readonly token = process.env.STAGING_CLUSTER_TOKEN ?? null;
-  private readonly agent: https.Agent | null;
+  private readonly apiClient: KubernetesApiClient;
 
   constructor() {
+    const baseUrl = process.env.STAGING_CLUSTER_API_URL ?? null;
+    const token = process.env.STAGING_CLUSTER_TOKEN ?? null;
     const encodedCa = process.env.STAGING_CLUSTER_CA_BASE64;
-    if (!this.baseUrl || !this.token || !encodedCa) {
-      this.agent = null;
+    if (!baseUrl || !token || !encodedCa) {
+      this.apiClient = new KubernetesApiClient(null, null, null, 'Staging cluster reader is not configured.');
       return;
     }
 
-    this.agent = new https.Agent({
-      ca: Buffer.from(encodedCa, 'base64').toString('utf8'),
-      keepAlive: true
-    });
+    this.apiClient = new KubernetesApiClient(
+      baseUrl,
+      token,
+      new https.Agent({
+        ca: Buffer.from(encodedCa, 'base64').toString('utf8'),
+        keepAlive: true
+      }),
+      'Staging cluster reader is not configured.'
+    );
   }
 
   get enabled(): boolean {
-    return this.baseUrl !== null && this.token !== null && this.agent !== null;
+    return this.apiClient.enabled;
   }
 
   async listServiceScaling(
@@ -218,13 +90,13 @@ export class StagingClusterReader {
     }
 
     const [hpas, rollouts, deployments, pods, podMetrics] = await Promise.all([
-      this.requestJson<HorizontalPodAutoscalerList>(
+      this.apiClient.getJson<HorizontalPodAutoscalerList>(
         `/apis/autoscaling/v2/namespaces/${this.namespace}/horizontalpodautoscalers`
       ),
-      this.requestJson<RolloutList>(`/apis/argoproj.io/v1alpha1/namespaces/${this.namespace}/rollouts`),
-      this.requestJson<DeploymentList>(`/apis/apps/v1/namespaces/${this.namespace}/deployments`),
-      this.requestJson<PodList>(`/api/v1/namespaces/${this.namespace}/pods`),
-      this.requestJson<PodMetricsList>(`/apis/metrics.k8s.io/v1beta1/namespaces/${this.namespace}/pods`)
+      this.apiClient.getJson<RolloutList>(`/apis/argoproj.io/v1alpha1/namespaces/${this.namespace}/rollouts`),
+      this.apiClient.getJson<DeploymentList>(`/apis/apps/v1/namespaces/${this.namespace}/deployments`),
+      this.apiClient.getJson<PodList>(`/api/v1/namespaces/${this.namespace}/pods`),
+      this.apiClient.getJson<PodMetricsList>(`/apis/metrics.k8s.io/v1beta1/namespaces/${this.namespace}/pods`)
     ]);
 
     const hpaByTarget = new Map((hpas.items ?? []).map((hpa) => [hpa.spec?.scaleTargetRef?.name ?? '', hpa]));
@@ -257,15 +129,15 @@ export class StagingClusterReader {
       }
 
       for (const container of pod.spec?.containers ?? []) {
-        current.cpuRequestsMillicores += this.parseCpuToMillicores(container.resources?.requests?.cpu);
-        current.memoryRequestsMi += this.parseMemoryToMi(container.resources?.requests?.memory);
-        current.memoryLimitsMi += this.parseMemoryToMi(container.resources?.limits?.memory);
+        current.cpuRequestsMillicores += parseCpuToMillicores(container.resources?.requests?.cpu);
+        current.memoryRequestsMi += parseMemoryToMi(container.resources?.requests?.memory);
+        current.memoryLimitsMi += parseMemoryToMi(container.resources?.limits?.memory);
       }
 
       const podMetric = podMetricsByName.get(pod.metadata?.name ?? '');
       for (const container of podMetric?.containers ?? []) {
-        current.cpuUsageMillicores += this.parseCpuToMillicores(container.usage?.cpu);
-        current.memoryUsageMi += this.parseMemoryToMi(container.usage?.memory);
+        current.cpuUsageMillicores += parseCpuToMillicores(container.usage?.cpu);
+        current.memoryUsageMi += parseMemoryToMi(container.usage?.memory);
       }
 
       podSnapshots.set(appName, current);
@@ -308,8 +180,8 @@ export class StagingClusterReader {
       const hpaCpuPercent = this.findCurrentCpuPercent(hpa);
       const cpuPercent =
         hpaCpuPercent ??
-        this.percentOrZero(podSnapshot.cpuUsageMillicores, podSnapshot.cpuRequestsMillicores);
-      const memoryPercent = this.percentOrZero(
+        percentOrZero(podSnapshot.cpuUsageMillicores, podSnapshot.cpuRequestsMillicores);
+      const memoryPercent = percentOrZero(
         podSnapshot.memoryUsageMi,
         podSnapshot.memoryLimitsMi > 0 ? podSnapshot.memoryLimitsMi : podSnapshot.memoryRequestsMi
       );
@@ -409,95 +281,4 @@ export class StagingClusterReader {
     return timestamps[0] ?? null;
   }
 
-  private percentOrZero(numerator: number, denominator: number): number {
-    if (denominator <= 0) {
-      return 0;
-    }
-    return Math.round((numerator / denominator) * 100);
-  }
-
-  private parseCpuToMillicores(raw: string | undefined): number {
-    if (!raw) {
-      return 0;
-    }
-    if (raw.endsWith('m')) {
-      return Number.parseFloat(raw.slice(0, -1));
-    }
-    if (raw.endsWith('n')) {
-      return Number.parseFloat(raw.slice(0, -1)) / 1_000_000;
-    }
-    if (raw.endsWith('u')) {
-      return Number.parseFloat(raw.slice(0, -1)) / 1_000;
-    }
-    return Number.parseFloat(raw) * 1_000;
-  }
-
-  private parseMemoryToMi(raw: string | undefined): number {
-    if (!raw) {
-      return 0;
-    }
-    const units = [
-      ['Ki', 1 / 1024],
-      ['Mi', 1],
-      ['Gi', 1024],
-      ['Ti', 1024 * 1024],
-      ['K', 1 / 1000],
-      ['M', 1 / (1000 * 1000 / 1024 / 1024)],
-      ['G', 1000 * 1000 * 1000 / 1024 / 1024],
-      ['T', 1000 * 1000 * 1000 * 1000 / 1024 / 1024],
-      ['m', 1 / 1000 / 1024 / 1024]
-    ] as const;
-
-    for (const [suffix, factor] of units) {
-      if (raw.endsWith(suffix)) {
-        return Number.parseFloat(raw.slice(0, -suffix.length)) * factor;
-      }
-    }
-
-    return Number.parseFloat(raw) / 1024 / 1024;
-  }
-
-  private async requestJson<T>(path: string): Promise<T> {
-    if (!this.enabled || !this.baseUrl || !this.token || !this.agent) {
-      throw new Error('Staging cluster reader is not configured.');
-    }
-
-    return new Promise<T>((resolve, reject) => {
-      const request = https.request(
-        `${this.baseUrl}${path}`,
-        {
-          method: 'GET',
-          agent: this.agent ?? undefined,
-          headers: {
-            Accept: 'application/json',
-            Authorization: `Bearer ${this.token}`
-          }
-        },
-        (response) => {
-          const chunks: Buffer[] = [];
-          response.on('data', (chunk) => {
-            chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-          });
-          response.on('end', () => {
-            const raw = Buffer.concat(chunks).toString('utf8');
-            if ((response.statusCode ?? 500) >= 400) {
-              reject(
-                new Error(`Staging cluster API GET ${path} failed with ${response.statusCode}: ${raw}`)
-              );
-              return;
-            }
-
-            try {
-              resolve((raw ? JSON.parse(raw) : {}) as T);
-            } catch (error) {
-              reject(error);
-            }
-          });
-        }
-      );
-
-      request.on('error', reject);
-      request.end();
-    });
-  }
 }
