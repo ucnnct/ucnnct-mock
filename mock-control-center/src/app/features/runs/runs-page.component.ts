@@ -127,7 +127,15 @@ export class RunsPageComponent {
   }
 
   protected applyPreset(
-    preset: 'balanced' | 'conversation' | 'attachments' | 'verticalMedia' | 'groupOff' | 'validation10k'
+    preset:
+      | 'balanced'
+      | 'conversation'
+      | 'attachments'
+      | 'verticalMedia'
+      | 'demoMedia150'
+      | 'demoGroup150'
+      | 'groupOff'
+      | 'validation10k'
   ): void {
     if (preset === 'balanced') {
       this.form.patchValue({
@@ -189,6 +197,38 @@ export class RunsPageComponent {
         gradualOnline: false,
         weights: { browse: 6, privateMessage: 12, group: 0, media: 64, social: 4, notificationCheck: 14 },
         media: { uploadProbability: 0.32 }
+      });
+      return;
+    }
+
+    if (preset === 'demoMedia150') {
+      this.form.patchValue({
+        runName: 'demo-vertical-media-150',
+        virtualUsers: 150,
+        durationSeconds: 240,
+        rampUpSeconds: 45,
+        thinkTimeMinMs: 220,
+        thinkTimeMaxMs: 900,
+        avgSessionDurationSeconds: 240,
+        gradualOnline: false,
+        weights: { browse: 8, privateMessage: 16, group: 0, media: 56, social: 4, notificationCheck: 16 },
+        media: { uploadProbability: 0.24 }
+      });
+      return;
+    }
+
+    if (preset === 'demoGroup150') {
+      this.form.patchValue({
+        runName: 'demo-group-heavy-150',
+        virtualUsers: 150,
+        durationSeconds: 240,
+        rampUpSeconds: 45,
+        thinkTimeMinMs: 300,
+        thinkTimeMaxMs: 1100,
+        avgSessionDurationSeconds: 240,
+        gradualOnline: false,
+        weights: { browse: 8, privateMessage: 20, group: 54, media: 0, social: 6, notificationCheck: 12 },
+        media: { uploadProbability: 0 }
       });
       return;
     }
