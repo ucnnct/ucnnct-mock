@@ -3,6 +3,8 @@ package cc.uconnect.mockuser;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
+import java.net.CookieManager;
+import java.net.CookiePolicy;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -17,12 +19,15 @@ final class StagingIdentityHttpClient {
   private final ObjectMapper objectMapper;
   private final StagingIdentityProperties identityProperties;
   private final HttpClient httpClient;
+  private final CookieManager cookieManager;
 
   StagingIdentityHttpClient(ObjectMapper objectMapper, StagingIdentityProperties identityProperties) {
     this.objectMapper = objectMapper;
     this.identityProperties = identityProperties;
+    this.cookieManager = new CookieManager(null, CookiePolicy.ACCEPT_ALL);
     this.httpClient = HttpClient.newBuilder()
         .connectTimeout(Duration.ofSeconds(10))
+        .cookieHandler(cookieManager)
         .followRedirects(HttpClient.Redirect.NORMAL)
         .build();
   }
