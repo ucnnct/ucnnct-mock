@@ -346,8 +346,20 @@ export class StagingClusterReader {
 
     const averageCpuRequest = podSnapshot.cpuRequestsMillicores / podSnapshot.podCount;
     const averageMemoryRequest = podSnapshot.memoryRequestsMi / podSnapshot.podCount;
-    const cpuApplied = this.isCloseToRecommendation(averageCpuRequest, recommendation.targetCpuMillicores);
-    const memoryApplied = this.isCloseToRecommendation(averageMemoryRequest, recommendation.targetMemoryMi);
+    const cpuApplied =
+      this.isCloseToRecommendation(averageCpuRequest, recommendation.targetCpuMillicores) ||
+      this.isWithinRecommendationBounds(
+        averageCpuRequest,
+        recommendation.lowerBoundCpuMillicores,
+        recommendation.upperBoundCpuMillicores
+      );
+    const memoryApplied =
+      this.isCloseToRecommendation(averageMemoryRequest, recommendation.targetMemoryMi) ||
+      this.isWithinRecommendationBounds(
+        averageMemoryRequest,
+        recommendation.lowerBoundMemoryMi,
+        recommendation.upperBoundMemoryMi
+      );
     return cpuApplied && memoryApplied ? 'applied' : 'applying';
   }
 
@@ -356,6 +368,12 @@ export class StagingClusterReader {
       return true;
     }
     return Math.abs(current - recommended) / recommended <= 0.15;
+  }
+
+  private isWithinRecommendationBounds(current: number, lowerBound: number, upperBound: number): boolean {
+    const lower = lowerBound > 0 ? lowerBound : 0;
+    const upper = upperBound > 0 ? upperBound : Number.POSITIVE_INFINITY;
+    return current >= lower && current <= upper;
   }
 
   private formatVpaRecommendation(recommendation: VpaRecommendation | null): string {
