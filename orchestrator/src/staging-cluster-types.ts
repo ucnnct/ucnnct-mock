@@ -187,4 +187,14 @@ export type ServicePodSnapshot = {
   memoryRequestsMi: number;
   memoryLimitsMi: number;
   memoryUsageMi: number;
+  containers: Record<string, ServiceContainerSnapshot>;
+};
+
+export type ServiceContainerSnapshot = {
+  podCount: number;
+  cpuRequestsMillicores: number;
+  cpuUsageMillicores: number;
+  memoryRequestsMi: number;
+  memoryLimitsMi: number;
+  memoryUsageMi: number;
 };

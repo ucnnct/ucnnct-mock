@@ -9,6 +9,7 @@ import type {
   HorizontalPodAutoscalerList,
   PodList,
   PodMetricsList,
+  ServiceContainerSnapshot,
   RolloutList,
   ServicePodSnapshot,
   VerticalPodAutoscalerItem,
@@ -49,10 +50,13 @@ export type StagingServiceScaling = {
   cpuTargetPercent: number | null;
   cpuUsageMillicores: number;
   cpuRequestMillicores: number;
+  cpuRequestPerPodMillicores: number;
   memoryPercent: number;
   memoryUsageMi: number;
   memoryRequestMi: number;
+  memoryRequestPerPodMi: number;
   memoryLimitMi: number;
+  memoryLimitPerPodMi: number;
   vpaMode: string | null;
   vpaState: 'unavailable' | 'observe' | 'applying' | 'applied';
   vpaRecommendation: VpaRecommendation | null;
@@ -131,7 +135,8 @@ export class StagingClusterReader {
         cpuUsageMillicores: 0,
         memoryRequestsMi: 0,
         memoryLimitsMi: 0,
-        memoryUsageMi: 0
+        memoryUsageMi: 0,
+        containers: {}
       };
 
       current.podCount += 1;
@@ -140,15 +145,34 @@ export class StagingClusterReader {
       }
 
       for (const container of pod.spec?.containers ?? []) {
-        current.cpuRequestsMillicores += parseCpuToMillicores(container.resources?.requests?.cpu);
-        current.memoryRequestsMi += parseMemoryToMi(container.resources?.requests?.memory);
-        current.memoryLimitsMi += parseMemoryToMi(container.resources?.limits?.memory);
+        const containerName = container.name ?? 'container';
+        const containerSnapshot = this.containerSnapshotFor(current, containerName);
+        const cpuRequest = parseCpuToMillicores(container.resources?.requests?.cpu);
+        const memoryRequest = parseMemoryToMi(container.resources?.requests?.memory);
+        const memoryLimit = parseMemoryToMi(container.resources?.limits?.memory);
+
+        containerSnapshot.podCount += 1;
+        containerSnapshot.cpuRequestsMillicores += cpuRequest;
+        containerSnapshot.memoryRequestsMi += memoryRequest;
+        containerSnapshot.memoryLimitsMi += memoryLimit;
+
+        current.cpuRequestsMillicores += cpuRequest;
+        current.memoryRequestsMi += memoryRequest;
+        current.memoryLimitsMi += memoryLimit;
       }
 
       const podMetric = podMetricsByName.get(pod.metadata?.name ?? '');
       for (const container of podMetric?.containers ?? []) {
-        current.cpuUsageMillicores += parseCpuToMillicores(container.usage?.cpu);
-        current.memoryUsageMi += parseMemoryToMi(container.usage?.memory);
+        const containerName = container.name ?? 'container';
+        const containerSnapshot = this.containerSnapshotFor(current, containerName);
+        const cpuUsage = parseCpuToMillicores(container.usage?.cpu);
+        const memoryUsage = parseMemoryToMi(container.usage?.memory);
+
+        containerSnapshot.cpuUsageMillicores += cpuUsage;
+        containerSnapshot.memoryUsageMi += memoryUsage;
+
+        current.cpuUsageMillicores += cpuUsage;
+        current.memoryUsageMi += memoryUsage;
       }
 
       podSnapshots.set(appName, current);
@@ -174,8 +198,23 @@ export class StagingClusterReader {
         cpuUsageMillicores: 0,
         memoryRequestsMi: 0,
         memoryLimitsMi: 0,
-        memoryUsageMi: 0
+        memoryUsageMi: 0,
+        containers: {}
       };
+      const vpaContainerSnapshot = this.findVpaContainerSnapshot(podSnapshot, vpaRecommendation);
+      const requestPodCount = vpaContainerSnapshot?.podCount ?? podSnapshot.podCount;
+      const cpuRequestPerPodMillicores = this.averageOrZero(
+        vpaContainerSnapshot?.cpuRequestsMillicores ?? podSnapshot.cpuRequestsMillicores,
+        requestPodCount
+      );
+      const memoryRequestPerPodMi = this.averageOrZero(
+        vpaContainerSnapshot?.memoryRequestsMi ?? podSnapshot.memoryRequestsMi,
+        requestPodCount
+      );
+      const memoryLimitPerPodMi = this.averageOrZero(
+        vpaContainerSnapshot?.memoryLimitsMi ?? podSnapshot.memoryLimitsMi,
+        requestPodCount
+      );
 
       const workloadSpecReplicas = workload?.spec?.replicas ?? podSnapshot.podCount ?? definition.fallbackMinReplicas;
       const workloadStatusReplicas =
@@ -205,7 +244,13 @@ export class StagingClusterReader {
         this.findLatestTransitionTime(workload?.status?.conditions) ??
         new Date().toISOString();
       const hpaState = this.buildHpaState(hpa, currentReplicas, targetReplicas, readyReplicas);
-      const vpaState = this.buildVpaState(vpa, vpaRecommendation, podSnapshot);
+      const vpaState = this.buildVpaState(
+        vpa,
+        vpaRecommendation,
+        requestPodCount,
+        cpuRequestPerPodMillicores,
+        memoryRequestPerPodMi
+      );
       const status: StagingServiceScaling['status'] =
         readyReplicas < targetReplicas || currentReplicas !== targetReplicas
           ? 'scaling'
@@ -237,10 +282,13 @@ export class StagingClusterReader {
         cpuTargetPercent,
         cpuUsageMillicores: Math.round(podSnapshot.cpuUsageMillicores),
         cpuRequestMillicores: Math.round(podSnapshot.cpuRequestsMillicores),
+        cpuRequestPerPodMillicores: Math.round(cpuRequestPerPodMillicores),
         memoryPercent,
         memoryUsageMi: Math.round(podSnapshot.memoryUsageMi),
         memoryRequestMi: Math.round(podSnapshot.memoryRequestsMi),
+        memoryRequestPerPodMi: Math.round(memoryRequestPerPodMi),
         memoryLimitMi: Math.round(podSnapshot.memoryLimitsMi),
+        memoryLimitPerPodMi: Math.round(memoryLimitPerPodMi),
         vpaMode,
         vpaState,
         vpaRecommendation,
@@ -260,6 +308,37 @@ export class StagingClusterReader {
     } catch {
       return { items: [] };
     }
+  }
+
+  private containerSnapshotFor(
+    podSnapshot: ServicePodSnapshot,
+    containerName: string
+  ): ServiceContainerSnapshot {
+    podSnapshot.containers[containerName] ??= {
+      podCount: 0,
+      cpuRequestsMillicores: 0,
+      cpuUsageMillicores: 0,
+      memoryRequestsMi: 0,
+      memoryLimitsMi: 0,
+      memoryUsageMi: 0
+    };
+    return podSnapshot.containers[containerName];
+  }
+
+  private findVpaContainerSnapshot(
+    podSnapshot: ServicePodSnapshot,
+    recommendation: VpaRecommendation | null
+  ): ServiceContainerSnapshot | null {
+    if (recommendation?.containerName) {
+      return podSnapshot.containers[recommendation.containerName] ?? null;
+    }
+
+    const snapshots = Object.values(podSnapshot.containers);
+    return snapshots.length === 1 ? snapshots[0] : null;
+  }
+
+  private averageOrZero(total: number, count: number): number {
+    return count > 0 ? total / count : 0;
   }
 
   private buildHpaState(
@@ -329,7 +408,9 @@ export class StagingClusterReader {
   private buildVpaState(
     vpa: VerticalPodAutoscalerItem | undefined,
     recommendation: VpaRecommendation | null,
-    podSnapshot: ServicePodSnapshot
+    podCount: number,
+    cpuRequestPerPodMillicores: number,
+    memoryRequestPerPodMi: number
   ): StagingServiceScaling['vpaState'] {
     if (!vpa) {
       return 'unavailable';
@@ -340,23 +421,21 @@ export class StagingClusterReader {
       return 'observe';
     }
 
-    if (!recommendation || podSnapshot.podCount === 0) {
+    if (!recommendation || podCount === 0) {
       return 'applying';
     }
 
-    const averageCpuRequest = podSnapshot.cpuRequestsMillicores / podSnapshot.podCount;
-    const averageMemoryRequest = podSnapshot.memoryRequestsMi / podSnapshot.podCount;
     const cpuApplied =
-      this.isCloseToRecommendation(averageCpuRequest, recommendation.targetCpuMillicores) ||
+      this.isCloseToRecommendation(cpuRequestPerPodMillicores, recommendation.targetCpuMillicores) ||
       this.isWithinRecommendationBounds(
-        averageCpuRequest,
+        cpuRequestPerPodMillicores,
         recommendation.lowerBoundCpuMillicores,
         recommendation.upperBoundCpuMillicores
       );
     const memoryApplied =
-      this.isCloseToRecommendation(averageMemoryRequest, recommendation.targetMemoryMi) ||
+      this.isCloseToRecommendation(memoryRequestPerPodMi, recommendation.targetMemoryMi) ||
       this.isWithinRecommendationBounds(
-        averageMemoryRequest,
+        memoryRequestPerPodMi,
         recommendation.lowerBoundMemoryMi,
         recommendation.upperBoundMemoryMi
       );

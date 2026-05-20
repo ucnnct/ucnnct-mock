@@ -74,6 +74,27 @@
   gap: 0.35rem;
 }
 
+.vpa-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.vpa-detail-grid > div {
+  display: grid;
+  gap: 0.18rem;
+  min-width: 0;
+}
+
+.vpa-detail-grid strong,
+.vpa-detail-grid small {
+  overflow-wrap: anywhere;
+}
+
+.vpa-detail-grid small {
+  color: var(--color-secondary-500);
+}
+
 .meter-track {
   overflow: hidden;
   height: 10px;
@@ -146,7 +167,8 @@
   .service-topline,
   .meter-label,
   .event-topline,
-  .replica-summary {
+  .replica-summary,
+  .vpa-detail-grid {
     display: grid;
     grid-template-columns: 1fr;
   }

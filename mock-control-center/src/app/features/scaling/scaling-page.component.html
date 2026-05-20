@@ -70,9 +70,9 @@
         <div class="resource-comparison">
           <div class="resource-row">
             <div class="meter-label">
-              <span>CPU request</span>
+              <span>CPU request / pod</span>
               <strong>
-                {{ service.cpuRequestMillicores }}m
+                {{ cpuRequestPerPod(service) }}m
                 <ng-container *ngIf="service.vpaRecommendation">
                   -> {{ service.vpaRecommendation.targetCpuMillicores }}m
                 </ng-container>
@@ -81,16 +81,16 @@
             <div class="meter-track">
               <div
                 class="meter-fill"
-                [style.width.%]="recommendationPercent(service.cpuRequestMillicores, service.vpaRecommendation?.targetCpuMillicores)"
+                [style.width.%]="recommendationPercent(cpuRequestPerPod(service), service.vpaRecommendation?.targetCpuMillicores)"
               ></div>
             </div>
           </div>
 
           <div class="resource-row">
             <div class="meter-label">
-              <span>Memory request</span>
+              <span>Memory request / pod</span>
               <strong>
-                {{ service.memoryRequestMi }}Mi
+                {{ memoryRequestPerPod(service) }}Mi
                 <ng-container *ngIf="service.vpaRecommendation">
                   -> {{ service.vpaRecommendation.targetMemoryMi }}Mi
                 </ng-container>
@@ -99,15 +99,38 @@
             <div class="meter-track meter-track--memory">
               <div
                 class="meter-fill meter-fill--memory"
-                [style.width.%]="recommendationPercent(service.memoryRequestMi, service.vpaRecommendation?.targetMemoryMi)"
+                [style.width.%]="recommendationPercent(memoryRequestPerPod(service), service.vpaRecommendation?.targetMemoryMi)"
               ></div>
             </div>
           </div>
         </div>
 
+        <div class="vpa-detail-grid" *ngIf="service.vpaRecommendation">
+          <div>
+            <span class="metric-label">Bounds / pod</span>
+            <strong>
+              {{ service.vpaRecommendation.lowerBoundCpuMillicores }}-{{ service.vpaRecommendation.upperBoundCpuMillicores }}m
+            </strong>
+            <small>{{ service.vpaRecommendation.lowerBoundMemoryMi }}-{{ service.vpaRecommendation.upperBoundMemoryMi }}Mi</small>
+          </div>
+          <div>
+            <span class="metric-label">Uncapped / pod</span>
+            <strong>{{ service.vpaRecommendation.uncappedTargetCpuMillicores }}m</strong>
+            <small>{{ service.vpaRecommendation.uncappedTargetMemoryMi }}Mi</small>
+          </div>
+          <div>
+            <span class="metric-label">Target total</span>
+            <strong>{{ recommendedCpuTotal(service) }}m</strong>
+            <small>{{ recommendedMemoryTotal(service) }}Mi</small>
+          </div>
+        </div>
+
         <div class="service-bottomline">
           <span>{{ service.vpaState }}</span>
-          <span>{{ service.memoryLimitMi }}Mi limit</span>
+          <span>{{ service.podCount }} pods</span>
+          <span>{{ service.cpuRequestMillicores }}m total CPU request</span>
+          <span>{{ service.memoryRequestMi }}Mi total memory request</span>
+          <span>{{ memoryLimitPerPod(service) }}Mi limit/pod</span>
           <span>{{ service.latestScaleAt | date:'short' }}</span>
         </div>
       </article>
@@ -193,9 +216,9 @@
 
         <div class="service-bottomline">
           <span>{{ service.cpuUsageMillicores }}m CPU</span>
-          <span>{{ service.cpuRequestMillicores }}m requested</span>
+          <span>{{ service.cpuRequestMillicores }}m total requested</span>
           <span>{{ service.memoryUsageMi }}Mi memory</span>
-          <span>{{ service.memoryRequestMi }}Mi requested</span>
+          <span>{{ service.memoryRequestMi }}Mi total requested</span>
           <span>{{ service.latestScaleAt | date:'short' }}</span>
         </div>
 

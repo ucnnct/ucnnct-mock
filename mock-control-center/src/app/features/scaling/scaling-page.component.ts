@@ -31,7 +31,31 @@ export class ScalingPageComponent {
     return Math.max(0, Math.min(100, Math.round((current / recommended) * 100)));
   }
 
+  protected cpuRequestPerPod(service: ServiceScaling): number {
+    return service.cpuRequestPerPodMillicores ?? this.averagePerPod(service.cpuRequestMillicores, service.podCount);
+  }
+
+  protected memoryRequestPerPod(service: ServiceScaling): number {
+    return service.memoryRequestPerPodMi ?? this.averagePerPod(service.memoryRequestMi, service.podCount);
+  }
+
+  protected memoryLimitPerPod(service: ServiceScaling): number {
+    return service.memoryLimitPerPodMi ?? this.averagePerPod(service.memoryLimitMi, service.podCount);
+  }
+
+  protected recommendedCpuTotal(service: ServiceScaling): number {
+    return (service.vpaRecommendation?.targetCpuMillicores ?? 0) * service.podCount;
+  }
+
+  protected recommendedMemoryTotal(service: ServiceScaling): number {
+    return (service.vpaRecommendation?.targetMemoryMi ?? 0) * service.podCount;
+  }
+
   protected vpaBadgeLabel(service: ServiceScaling): string {
     return service.vpaMode ? `VPA ${service.vpaMode}` : 'No VPA';
+  }
+
+  private averagePerPod(total: number, podCount: number): number {
+    return podCount > 0 ? Math.round(total / podCount) : 0;
   }
 }

@@ -126,10 +126,13 @@ export interface ServiceScaling {
   cpuTargetPercent: number | null;
   cpuUsageMillicores: number;
   cpuRequestMillicores: number;
+  cpuRequestPerPodMillicores: number;
   memoryPercent: number;
   memoryUsageMi: number;
   memoryRequestMi: number;
+  memoryRequestPerPodMi: number;
   memoryLimitMi: number;
+  memoryLimitPerPodMi: number;
   vpaMode: string | null;
   vpaState: 'unavailable' | 'observe' | 'applying' | 'applied';
   vpaRecommendation: VpaRecommendation | null;
