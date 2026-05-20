@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { Component, computed, inject, signal } from '@angular/core';
+import { Component, DestroyRef, computed, effect, inject, signal } from '@angular/core';
 import { ServiceScaling } from '../../core/models/control-plane.models';
 import { ControlPlaneStore } from '../../core/services/control-plane.store';
 
@@ -11,7 +11,18 @@ import { ControlPlaneStore } from '../../core/services/control-plane.store';
 })
 export class ScalingPageComponent {
   protected readonly store = inject(ControlPlaneStore);
-  protected readonly selectedService = signal<ServiceScaling | null>(null);
+  private readonly destroyRef = inject(DestroyRef);
+  private readonly selectedServiceId = signal<string | null>(null);
+  private modalRefreshInterval: ReturnType<typeof setInterval> | null = null;
+
+  protected readonly selectedService = computed(() => {
+    const selectedId = this.selectedServiceId();
+    if (!selectedId) {
+      return null;
+    }
+
+    return this.store.services().find((service) => service.id === selectedId) ?? null;
+  });
   protected readonly attentionServices = computed(() =>
     this.store.services().filter((service) => service.status === 'attention' || service.status === 'scaling')
   );
@@ -21,6 +32,19 @@ export class ScalingPageComponent {
   protected readonly vpaObservedServices = computed(() =>
     this.store.services().filter((service) => service.vpaState === 'observe')
   );
+
+  constructor() {
+    effect(() => {
+      if (this.selectedServiceId()) {
+        this.startModalRefresh();
+        return;
+      }
+
+      this.stopModalRefresh();
+    });
+
+    this.destroyRef.onDestroy(() => this.stopModalRefresh());
+  }
 
   protected cpuRequestPerPod(service: ServiceScaling): number {
     return service.cpuRequestPerPodMillicores ?? this.averagePerPod(service.cpuRequestMillicores, service.podCount);
@@ -39,11 +63,12 @@ export class ScalingPageComponent {
   }
 
   protected openServiceDetails(service: ServiceScaling): void {
-    this.selectedService.set(service);
+    this.selectedServiceId.set(service.id);
+    void this.store.reload(true);
   }
 
   protected closeServiceDetails(): void {
-    this.selectedService.set(null);
+    this.selectedServiceId.set(null);
   }
 
   protected vpaBadgeLabel(service: ServiceScaling): string {
@@ -52,5 +77,24 @@ export class ScalingPageComponent {
 
   private averagePerPod(total: number, podCount: number): number {
     return podCount > 0 ? Math.round(total / podCount) : 0;
+  }
+
+  private startModalRefresh(): void {
+    if (this.modalRefreshInterval !== null) {
+      return;
+    }
+
+    this.modalRefreshInterval = setInterval(() => {
+      void this.store.reload(true);
+    }, 1000);
+  }
+
+  private stopModalRefresh(): void {
+    if (this.modalRefreshInterval === null) {
+      return;
+    }
+
+    clearInterval(this.modalRefreshInterval);
+    this.modalRefreshInterval = null;
   }
 }
