@@ -264,6 +264,7 @@ export function buildEstimatedServiceScaling(
       vpaMode: null,
       vpaState: 'unavailable',
       vpaRecommendation: null,
+      pods: [],
       latestScaleAt: new Date(Date.now() - (targetReplicas === currentReplicas ? 14 : 3) * 60_000).toISOString(),
       hpaState: targetReplicas === currentReplicas ? 'Steady' : currentReplicas < targetReplicas ? 'Scaling up' : 'Scaling down',
       status: targetReplicas !== currentReplicas ? 'scaling' : cpuPercent > 82 || memoryPercent > 82 ? 'attention' : 'healthy',

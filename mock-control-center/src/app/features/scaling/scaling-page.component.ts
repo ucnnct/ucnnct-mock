@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { Component, computed, inject } from '@angular/core';
+import { Component, computed, inject, signal } from '@angular/core';
 import { ServiceScaling } from '../../core/models/control-plane.models';
 import { ControlPlaneStore } from '../../core/services/control-plane.store';
 
@@ -11,6 +11,7 @@ import { ControlPlaneStore } from '../../core/services/control-plane.store';
 })
 export class ScalingPageComponent {
   protected readonly store = inject(ControlPlaneStore);
+  protected readonly selectedService = signal<ServiceScaling | null>(null);
   protected readonly attentionServices = computed(() =>
     this.store.services().filter((service) => service.status === 'attention' || service.status === 'scaling')
   );
@@ -20,16 +21,6 @@ export class ScalingPageComponent {
   protected readonly vpaObservedServices = computed(() =>
     this.store.services().filter((service) => service.vpaState === 'observe')
   );
-  protected readonly vpaRecommendedServices = computed(() =>
-    this.store.services().filter((service) => service.vpaRecommendation !== null)
-  );
-
-  protected recommendationPercent(current: number, recommended: number | undefined): number {
-    if (!recommended || recommended <= 0) {
-      return 0;
-    }
-    return Math.max(0, Math.min(100, Math.round((current / recommended) * 100)));
-  }
 
   protected cpuRequestPerPod(service: ServiceScaling): number {
     return service.cpuRequestPerPodMillicores ?? this.averagePerPod(service.cpuRequestMillicores, service.podCount);
@@ -39,16 +30,20 @@ export class ScalingPageComponent {
     return service.memoryRequestPerPodMi ?? this.averagePerPod(service.memoryRequestMi, service.podCount);
   }
 
-  protected memoryLimitPerPod(service: ServiceScaling): number {
-    return service.memoryLimitPerPodMi ?? this.averagePerPod(service.memoryLimitMi, service.podCount);
-  }
-
   protected recommendedCpuTotal(service: ServiceScaling): number {
     return (service.vpaRecommendation?.targetCpuMillicores ?? 0) * service.podCount;
   }
 
   protected recommendedMemoryTotal(service: ServiceScaling): number {
     return (service.vpaRecommendation?.targetMemoryMi ?? 0) * service.podCount;
+  }
+
+  protected openServiceDetails(service: ServiceScaling): void {
+    this.selectedService.set(service);
+  }
+
+  protected closeServiceDetails(): void {
+    this.selectedService.set(null);
   }
 
   protected vpaBadgeLabel(service: ServiceScaling): string {

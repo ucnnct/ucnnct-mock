@@ -1,5 +1,4 @@
 .hero,
-.vertical-panel,
 .services-panel,
 .worker-panel,
 .events-panel {
@@ -7,15 +6,10 @@
 }
 
 .service-grid,
-.vpa-strip,
 .worker-list,
 .event-list {
   display: grid;
   gap: 1rem;
-}
-
-.vpa-strip {
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
 }
 
 .service-grid {
@@ -23,14 +17,28 @@
 }
 
 .service-card,
-.vpa-card,
-.worker-card {
+.worker-card,
+.pod-card {
   display: grid;
   gap: 0.9rem;
   padding: 1rem;
   border-radius: 8px;
   border: 1px solid rgba(219, 230, 241, 0.95);
   background: rgba(255, 255, 255, 0.84);
+}
+
+.service-card {
+  cursor: pointer;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+}
+
+.service-card:hover,
+.service-card:focus-visible,
+.service-card--selected {
+  border-color: rgba(46, 137, 213, 0.72);
+  box-shadow: 0 12px 32px rgba(23, 62, 99, 0.12);
+  outline: none;
+  transform: translateY(-1px);
 }
 
 .service-topline,
@@ -55,6 +63,30 @@
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.request-summary,
+.modal-summary,
+.pod-resource-grid {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.request-summary {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.request-summary > div,
+.modal-summary > div,
+.pod-resource-grid > div {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.request-summary small,
+.pod-resource-grid small {
+  color: var(--color-secondary-500);
+}
+
 .metric-value--small {
   font-size: 1.25rem;
 }
@@ -62,37 +94,6 @@
 .meter {
   display: grid;
   gap: 0.35rem;
-}
-
-.resource-comparison {
-  display: grid;
-  gap: 0.75rem;
-}
-
-.resource-row {
-  display: grid;
-  gap: 0.35rem;
-}
-
-.vpa-detail-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.65rem;
-}
-
-.vpa-detail-grid > div {
-  display: grid;
-  gap: 0.18rem;
-  min-width: 0;
-}
-
-.vpa-detail-grid strong,
-.vpa-detail-grid small {
-  overflow-wrap: anywhere;
-}
-
-.vpa-detail-grid small {
-  color: var(--color-secondary-500);
 }
 
 .meter-track {
@@ -139,6 +140,50 @@
   min-height: 10px;
 }
 
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  align-items: center;
+  justify-items: center;
+  padding: 1.25rem;
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.pod-modal {
+  width: min(1120px, 100%);
+  max-height: min(760px, calc(100vh - 2.5rem));
+  overflow: auto;
+  padding: 1.25rem;
+}
+
+.modal-close {
+  border: 1px solid rgba(219, 230, 241, 0.95);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.94);
+  color: var(--color-secondary-700);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  padding: 0.45rem 0.7rem;
+}
+
+.modal-summary {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 1rem 0;
+}
+
+.pod-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 0.85rem;
+}
+
+.pod-resource-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .scaling-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(320px, 0.9fr);
@@ -168,7 +213,9 @@
   .meter-label,
   .event-topline,
   .replica-summary,
-  .vpa-detail-grid {
+  .request-summary,
+  .modal-summary,
+  .pod-resource-grid {
     display: grid;
     grid-template-columns: 1fr;
   }

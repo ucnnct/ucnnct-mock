@@ -10,6 +10,7 @@ import type {
   PodList,
   PodMetricsList,
   ServiceContainerSnapshot,
+  ServicePodInstanceSnapshot,
   RolloutList,
   ServicePodSnapshot,
   VerticalPodAutoscalerItem,
@@ -60,6 +61,7 @@ export type StagingServiceScaling = {
   vpaMode: string | null;
   vpaState: 'unavailable' | 'observe' | 'applying' | 'applied';
   vpaRecommendation: VpaRecommendation | null;
+  pods: ServicePodInstanceSnapshot[];
   latestScaleAt: string;
   hpaState: string;
   status: 'healthy' | 'scaling' | 'attention';
@@ -136,13 +138,28 @@ export class StagingClusterReader {
         memoryRequestsMi: 0,
         memoryLimitsMi: 0,
         memoryUsageMi: 0,
-        containers: {}
+        containers: {},
+        instances: []
       };
 
       current.podCount += 1;
-      if ((pod.status?.conditions ?? []).some((condition) => condition.type === 'Ready' && condition.status === 'True')) {
+      const ready = (pod.status?.conditions ?? []).some(
+        (condition) => condition.type === 'Ready' && condition.status === 'True'
+      );
+      if (ready) {
         current.readyReplicas += 1;
       }
+      const instance: ServicePodInstanceSnapshot = {
+        name: pod.metadata?.name ?? 'unknown-pod',
+        nodeName: pod.spec?.nodeName ?? 'unknown-node',
+        phase: pod.status?.phase ?? 'Unknown',
+        ready,
+        cpuUsageMillicores: 0,
+        cpuRequestMillicores: 0,
+        memoryUsageMi: 0,
+        memoryRequestMi: 0,
+        memoryLimitMi: 0
+      };
 
       for (const container of pod.spec?.containers ?? []) {
         const containerName = container.name ?? 'container';
@@ -159,6 +176,9 @@ export class StagingClusterReader {
         current.cpuRequestsMillicores += cpuRequest;
         current.memoryRequestsMi += memoryRequest;
         current.memoryLimitsMi += memoryLimit;
+        instance.cpuRequestMillicores += cpuRequest;
+        instance.memoryRequestMi += memoryRequest;
+        instance.memoryLimitMi += memoryLimit;
       }
 
       const podMetric = podMetricsByName.get(pod.metadata?.name ?? '');
@@ -173,8 +193,18 @@ export class StagingClusterReader {
 
         current.cpuUsageMillicores += cpuUsage;
         current.memoryUsageMi += memoryUsage;
+        instance.cpuUsageMillicores += cpuUsage;
+        instance.memoryUsageMi += memoryUsage;
       }
 
+      current.instances.push({
+        ...instance,
+        cpuUsageMillicores: Math.round(instance.cpuUsageMillicores),
+        cpuRequestMillicores: Math.round(instance.cpuRequestMillicores),
+        memoryUsageMi: Math.round(instance.memoryUsageMi),
+        memoryRequestMi: Math.round(instance.memoryRequestMi),
+        memoryLimitMi: Math.round(instance.memoryLimitMi)
+      });
       podSnapshots.set(appName, current);
     }
 
@@ -199,7 +229,8 @@ export class StagingClusterReader {
         memoryRequestsMi: 0,
         memoryLimitsMi: 0,
         memoryUsageMi: 0,
-        containers: {}
+        containers: {},
+        instances: []
       };
       const vpaContainerSnapshot = this.findVpaContainerSnapshot(podSnapshot, vpaRecommendation);
       const requestPodCount = vpaContainerSnapshot?.podCount ?? podSnapshot.podCount;
@@ -292,6 +323,7 @@ export class StagingClusterReader {
         vpaMode,
         vpaState,
         vpaRecommendation,
+        pods: podSnapshot.instances.sort((left, right) => left.name.localeCompare(right.name)),
         latestScaleAt,
         hpaState,
         status,

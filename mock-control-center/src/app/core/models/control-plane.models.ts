@@ -136,10 +136,23 @@ export interface ServiceScaling {
   vpaMode: string | null;
   vpaState: 'unavailable' | 'observe' | 'applying' | 'applied';
   vpaRecommendation: VpaRecommendation | null;
+  pods: ServicePodInstance[];
   latestScaleAt: string;
   hpaState: string;
   status: HealthState;
   note: string;
+}
+
+export interface ServicePodInstance {
+  name: string;
+  nodeName: string;
+  phase: string;
+  ready: boolean;
+  cpuUsageMillicores: number;
+  cpuRequestMillicores: number;
+  memoryUsageMi: number;
+  memoryRequestMi: number;
+  memoryLimitMi: number;
 }
 
 export interface VpaRecommendation {

@@ -188,6 +188,7 @@ export type ServicePodSnapshot = {
   memoryLimitsMi: number;
   memoryUsageMi: number;
   containers: Record<string, ServiceContainerSnapshot>;
+  instances: ServicePodInstanceSnapshot[];
 };
 
 export type ServiceContainerSnapshot = {
@@ -197,4 +198,16 @@ export type ServiceContainerSnapshot = {
   memoryRequestsMi: number;
   memoryLimitsMi: number;
   memoryUsageMi: number;
+};
+
+export type ServicePodInstanceSnapshot = {
+  name: string;
+  nodeName: string;
+  phase: string;
+  ready: boolean;
+  cpuUsageMillicores: number;
+  cpuRequestMillicores: number;
+  memoryUsageMi: number;
+  memoryRequestMi: number;
+  memoryLimitMi: number;
 };
