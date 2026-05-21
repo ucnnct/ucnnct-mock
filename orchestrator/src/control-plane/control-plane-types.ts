@@ -65,6 +65,7 @@ export type WorkerAssignment = {
   p95LatencyMs: number;
   objectiveMix: WorkerObjectiveMix;
   actionCounters: WorkerActionCounters;
+  behaviorCounters?: BehaviorWeights;
   recentEvents: Array<{
     id: string;
     timestamp: string;

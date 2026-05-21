@@ -207,7 +207,7 @@
         <section class="subsection">
           <div class="subsection-header">
             <span class="eyebrow">Action mix</span>
-            <strong>{{ observedActionTotal(run) | number: '1.0-0' }} observed actions</strong>
+            <strong>{{ observedActionTotal(run) | number: '1.0-0' }} observed behavior choices</strong>
           </div>
 
           <div class="action-mix">
@@ -220,7 +220,7 @@
                 <span class="configured" [style.width.%]="row.configuredPercent"></span>
                 <span class="observed" [style.width.%]="row.actualPercent"></span>
               </div>
-              <small class="muted">weight {{ row.configuredPercent }}% · observed {{ row.actualPercent }}%</small>
+              <small class="muted">weight {{ row.configuredPercent }}% - observed {{ row.actualPercent }}%</small>
             </article>
           </div>
         </section>

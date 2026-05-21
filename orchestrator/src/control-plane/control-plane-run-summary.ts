@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import {
+  BehaviorWeights,
   LeaseRecord,
   LoadPlannerConfig,
   RunDraftInput,
@@ -11,6 +12,7 @@ import {
   actionTitle,
   aggregateDemand,
   emptyActionCounters,
+  emptyBehaviorCounters,
   emptyObjectiveMix,
   pickTopServices,
   pressureFor
@@ -76,6 +78,13 @@ export function buildRunSummary(params: {
     }),
     emptyActionCounters()
   );
+  const behaviorCounters = assignments.reduce(
+    (aggregate, item) => addBehaviorCounters(
+      aggregate,
+      item.assignment.behaviorCounters ?? behaviorCountersFromActions(item.assignment.actionCounters)
+    ),
+    emptyBehaviorCounters()
+  );
   const lease = leases
     .filter((candidate) => candidate.runId === runId)
     .sort((left, right) => right.issuedAt.localeCompare(left.issuedAt))[0];
@@ -106,6 +115,7 @@ export function buildRunSummary(params: {
     topServices: pickTopServices(input.weights),
     objectiveMix,
     actionCounters,
+    behaviorCounters,
     events: recentEvents,
     milestoneIndex: [25, 50, 75, 100].filter((mark) => progressPercent >= mark).length
   };
@@ -148,6 +158,7 @@ export function createBootstrapSummary(runId: string, plan: RunPlan): RunSummary
     topServices: pickTopServices(plan.input.weights),
     objectiveMix: emptyObjectiveMix(),
     actionCounters: emptyActionCounters(),
+    behaviorCounters: emptyBehaviorCounters(),
     events: [
       {
         id: `bootstrap-queued-${crypto.randomUUID().slice(0, 8)}`,
@@ -278,6 +289,32 @@ export function resolveRunStatus(assignments: WorkerAssignmentRef[]): RunSummary
   if (assignments.some((item) => item.assignment.status === 'paused')) return 'paused';
   if (assignments.some((item) => item.assignment.status === 'failed')) return 'failed';
   return 'completed';
+}
+
+function addBehaviorCounters(left: BehaviorWeights, right: BehaviorWeights): BehaviorWeights {
+  return {
+    browse: left.browse + right.browse,
+    privateMessage: left.privateMessage + right.privateMessage,
+    group: left.group + right.group,
+    media: left.media + right.media,
+    social: left.social + right.social,
+    notificationCheck: left.notificationCheck + right.notificationCheck
+  };
+}
+
+function behaviorCountersFromActions(actionCounters: WorkerAssignment['actionCounters']): BehaviorWeights {
+  return {
+    browse: actionCounters.open_home,
+    privateMessage: actionCounters.open_private_conversation + actionCounters.send_private_message,
+    group:
+      actionCounters.open_group_conversation +
+      actionCounters.send_group_message +
+      actionCounters.create_group +
+      actionCounters.add_member,
+    media: actionCounters.prepare_upload + actionCounters.upload_file,
+    social: actionCounters.fetch_friends + actionCounters.accept_friend_request,
+    notificationCheck: actionCounters.fetch_notifications + actionCounters.open_notifications
+  };
 }
 
 function draftFromAssignment(assignment: WorkerAssignment): RunDraftInput {

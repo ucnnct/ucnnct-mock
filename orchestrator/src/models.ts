@@ -97,6 +97,7 @@ export interface RunSummary extends RunDraftInput {
   topServices: string[];
   objectiveMix: ObjectiveMix;
   actionCounters: ActionCounters;
+  behaviorCounters: BehaviorWeights;
   events: RunEvent[];
   milestoneIndex: number;
 }

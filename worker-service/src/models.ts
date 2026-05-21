@@ -154,6 +154,7 @@ export interface WorkerAssignmentSnapshot extends WorkerAssignmentInput {
   liveLastAt: string | null;
   objectiveMix: ObjectiveMix;
   actionCounters: ActionCounters;
+  behaviorCounters: BehaviorWeights;
   recentEvents: UserActionEvent[];
   users: VirtualUserSnapshot[];
 }

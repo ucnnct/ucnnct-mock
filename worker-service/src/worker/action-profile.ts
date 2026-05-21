@@ -1,4 +1,4 @@
-import { ActionCounters, ObjectiveMix, SessionObjective, UserAction } from '../models.js';
+import { ActionCounters, BehaviorWeights, ObjectiveMix, SessionObjective, UserAction } from '../models.js';
 import { ObjectiveBoostMap } from './runtime.js';
 
 export function emptyActionCounters(): ActionCounters {
@@ -18,6 +18,17 @@ export function emptyActionCounters(): ActionCounters {
     open_notifications: 0,
     accept_friend_request: 0,
     logout: 0
+  };
+}
+
+export function emptyBehaviorCounters(): BehaviorWeights {
+  return {
+    browse: 0,
+    privateMessage: 0,
+    group: 0,
+    media: 0,
+    social: 0,
+    notificationCheck: 0
   };
 }
 

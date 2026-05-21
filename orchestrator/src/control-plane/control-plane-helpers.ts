@@ -45,6 +45,17 @@ export function emptyActionCounters(): WorkerActionCounters {
   };
 }
 
+export function emptyBehaviorCounters(): BehaviorWeights {
+  return {
+    browse: 0,
+    privateMessage: 0,
+    group: 0,
+    media: 0,
+    social: 0,
+    notificationCheck: 0
+  };
+}
+
 export function splitVirtualUsers(totalUsers: number, shardCount: number): number[] {
   const base = Math.floor(totalUsers / shardCount);
   const remainder = totalUsers % shardCount;

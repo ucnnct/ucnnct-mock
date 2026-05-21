@@ -3,6 +3,7 @@ import {
   AssignedMockUserIdentity,
   AssignmentStatus,
   ObjectiveMix,
+  BehaviorWeights,
   SessionObjective,
   UserAction,
   UserActionEvent,
@@ -54,6 +55,7 @@ export type WorkerAssignmentRuntime = WorkerAssignmentInput & {
   liveLastAtMs: number | null;
   objectiveMix: ObjectiveMix;
   actionCounters: ActionCounters;
+  behaviorCounters: BehaviorWeights;
   recentEvents: UserActionEvent[];
   users: VirtualUserState[];
 };

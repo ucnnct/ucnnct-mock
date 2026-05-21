@@ -376,46 +376,37 @@ export class RunsPageComponent {
     actualPercent: number;
     count: number;
   }> {
+    const behaviorCounters = run.behaviorCounters ?? this.behaviorCountersFromActionCounters(run);
     const actionBuckets = [
       {
         key: 'browse' as const,
         label: 'Browse',
-        count: run.actionCounters.open_home
+        count: behaviorCounters.browse
       },
       {
         key: 'privateMessage' as const,
         label: 'Private messages',
-        count:
-          run.actionCounters.open_private_conversation +
-          run.actionCounters.send_private_message
+        count: behaviorCounters.privateMessage
       },
       {
         key: 'group' as const,
         label: 'Group activity',
-        count:
-          run.actionCounters.open_group_conversation +
-          run.actionCounters.send_group_message +
-          run.actionCounters.create_group +
-          run.actionCounters.add_member
+        count: behaviorCounters.group
       },
       {
         key: 'media' as const,
         label: 'Media',
-        count: run.actionCounters.prepare_upload + run.actionCounters.upload_file
+        count: behaviorCounters.media
       },
       {
         key: 'social' as const,
         label: 'Social / friends',
-        count:
-          run.actionCounters.fetch_friends +
-          run.actionCounters.accept_friend_request
+        count: behaviorCounters.social
       },
       {
         key: 'notificationCheck' as const,
         label: 'Notification checks',
-        count:
-          run.actionCounters.fetch_notifications +
-          run.actionCounters.open_notifications
+        count: behaviorCounters.notificationCheck
       }
     ];
     const totalActual = actionBuckets.reduce((sum, item) => sum + item.count, 0);
@@ -426,6 +417,27 @@ export class RunsPageComponent {
       actualPercent: totalActual > 0 ? Math.round((item.count / totalActual) * 100) : 0,
       count: item.count
     }));
+  }
+
+  private behaviorCountersFromActionCounters(run: RunSummary): RunSummary['weights'] {
+    return {
+      browse: run.actionCounters.open_home,
+      privateMessage:
+        run.actionCounters.open_private_conversation +
+        run.actionCounters.send_private_message,
+      group:
+        run.actionCounters.open_group_conversation +
+        run.actionCounters.send_group_message +
+        run.actionCounters.create_group +
+        run.actionCounters.add_member,
+      media: run.actionCounters.prepare_upload + run.actionCounters.upload_file,
+      social:
+        run.actionCounters.fetch_friends +
+        run.actionCounters.accept_friend_request,
+      notificationCheck:
+        run.actionCounters.fetch_notifications +
+        run.actionCounters.open_notifications
+    };
   }
 
   private percentOf(value: number, total: number): number {

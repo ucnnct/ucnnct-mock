@@ -204,8 +204,8 @@ export class WorkerEngine {
       }
 
       const nextUser = { ...user };
-      const action = this.behaviorPlanner.pickAction(nextUser, assignment, now);
-      const outcome = this.actionExecutor.applyAction(nextUser, action, assignment, now);
+      const plan = this.behaviorPlanner.pickActionPlan(nextUser, assignment, now);
+      const outcome = this.actionExecutor.applyAction(nextUser, plan.action, assignment, now);
 
       tickRequestCost.push(outcome.requestCost);
       tickMessageCount.push(outcome.messageCount);
@@ -214,9 +214,12 @@ export class WorkerEngine {
       tickLatency.push(outcome.latencyMs);
       tickFailures.push(outcome.failed ? 1 : 0);
 
-      assignment.actionCounters[action] += 1;
+      assignment.actionCounters[plan.action] += 1;
+      if (plan.behavior) {
+        assignment.behaviorCounters[plan.behavior] += 1;
+      }
       assignment.recentEvents = [
-        makeWorkerEvent(assignment, outcome.detail, action, nextUser.id, nextUser.sessionObjective),
+        makeWorkerEvent(assignment, outcome.detail, plan.action, nextUser.id, nextUser.sessionObjective),
         ...assignment.recentEvents
       ].slice(0, MAX_RECENT_EVENTS);
 

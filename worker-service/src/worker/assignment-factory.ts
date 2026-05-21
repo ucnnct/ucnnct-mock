@@ -1,5 +1,5 @@
 import { AssignmentStatus, WorkerAssignmentInput } from '../models.js';
-import { emptyActionCounters, emptyObjectiveMix } from './action-profile.js';
+import { emptyActionCounters, emptyBehaviorCounters, emptyObjectiveMix } from './action-profile.js';
 import { VirtualUserState, WorkerAssignmentRuntime } from './runtime.js';
 
 export type AssignmentRuntimeMeta = {
@@ -42,6 +42,7 @@ export function createWorkerAssignmentRuntime(
     liveLastAtMs: null,
     objectiveMix: emptyObjectiveMix(),
     actionCounters: emptyActionCounters(),
+    behaviorCounters: emptyBehaviorCounters(),
     recentEvents: [],
     users
   };
