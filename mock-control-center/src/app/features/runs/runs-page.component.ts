@@ -3,7 +3,7 @@ import { Component, computed, inject, signal } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { FormBuilder, ReactiveFormsModule } from '@angular/forms';
 import { map, startWith } from 'rxjs/operators';
-import { RunDraftInput, RunSummary } from '../../core/models/control-plane.models';
+import { RunDraftInput, RunEvent, RunSummary } from '../../core/models/control-plane.models';
 import { ControlPlaneStore } from '../../core/services/control-plane.store';
 
 @Component({
@@ -124,6 +124,42 @@ export class RunsPageComponent {
 
   protected selectRun(runId: string): void {
     this.selectedRunId.set(runId);
+  }
+
+  protected isSelectedRun(run: RunSummary): boolean {
+    return this.selectedRun()?.id === run.id;
+  }
+
+  protected isControllableRun(run: RunSummary): boolean {
+    return run.status === 'starting' || run.status === 'running' || run.status === 'paused';
+  }
+
+  protected runProgress(run: RunSummary): number {
+    return this.clampPercent(run.progressPercent);
+  }
+
+  protected activeUserPercent(run: RunSummary): number {
+    return this.percentOf(run.activeUsers, run.virtualUsers);
+  }
+
+  protected connectedUserPercent(run: RunSummary): number {
+    return this.percentOf(run.connectedUsers, run.virtualUsers);
+  }
+
+  protected openSocketPercent(run: RunSummary): number {
+    return this.percentOf(run.openSockets, run.virtualUsers);
+  }
+
+  protected errorRatePercent(run: RunSummary): number {
+    return Math.round(run.errorRate * 10_000) / 100;
+  }
+
+  protected observedActionTotal(run: RunSummary): number {
+    return this.observedBehaviorRows(run).reduce((sum, row) => sum + row.count, 0);
+  }
+
+  protected visibleEvents(run: RunSummary): RunEvent[] {
+    return run.events.slice(0, 5);
   }
 
   protected applyPreset(
@@ -390,5 +426,16 @@ export class RunsPageComponent {
       actualPercent: totalActual > 0 ? Math.round((item.count / totalActual) * 100) : 0,
       count: item.count
     }));
+  }
+
+  private percentOf(value: number, total: number): number {
+    if (total <= 0) {
+      return 0;
+    }
+    return this.clampPercent(Math.round((value / total) * 100));
+  }
+
+  private clampPercent(value: number): number {
+    return Math.min(100, Math.max(0, Math.round(value)));
   }
 }

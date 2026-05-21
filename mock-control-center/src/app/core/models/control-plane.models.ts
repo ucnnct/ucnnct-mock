@@ -256,6 +256,12 @@ export interface LoadPlannerConfig {
   maxVirtualUsers: number;
 }
 
+export interface WorkerTrafficRuntime {
+  webSocketMode: 'domain' | 'direct' | 'mixed' | 'unknown';
+  webSocketTargets: number;
+  workerSources: number;
+}
+
 export interface ControlPlaneSnapshot {
   architecture: ArchitectureStage[];
   planner: LoadPlannerConfig;
@@ -263,6 +269,7 @@ export interface ControlPlaneSnapshot {
   runs: RunSummary[];
   services: ServiceScaling[];
   workerNodes: WorkerNode[];
+  workerTrafficRuntime: WorkerTrafficRuntime;
   userRuntime: MockUserRuntime | null;
   fixtures: FixtureProfile[];
   leases: LeaseRecord[];

@@ -88,6 +88,8 @@ export type WorkerRuntime = {
   messagesPerSecond: number;
   uploadsPerMinute: number;
   avgP95LatencyMs: number;
+  webSocketMode?: 'domain' | 'direct';
+  webSocketTargets?: number;
 };
 
 export type LeaseResponse = {

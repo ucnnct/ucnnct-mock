@@ -10,7 +10,8 @@ import {
   RunSummary,
   ScalingEvent,
   ServiceScaling,
-  WorkerNode
+  WorkerNode,
+  WorkerTrafficRuntime
 } from './models.js';
 import { KubernetesWorkerController } from './kubernetes-worker-controller.js';
 import { StagingClusterReader } from './staging-cluster-reader.js';
@@ -33,7 +34,8 @@ import {
 } from './control-plane/control-plane-dashboard.js';
 import {
   DependencyHealth,
-  WorkerAssignmentRef
+  WorkerAssignmentRef,
+  WorkerSource
 } from './control-plane/control-plane-types.js';
 import { ControlPlaneRunCoordinator } from './control-plane/control-plane-run-coordinator.js';
 import { createControlPlaneRunState } from './control-plane/control-plane-run-state.js';
@@ -118,6 +120,7 @@ export class ControlPlaneService {
       (value, min, max) => this.clamp(value, min, max)
     );
     const dashboard = buildDashboardStats(runs, services, workerSources, workerNodes);
+    const workerTrafficRuntime = this.buildWorkerTrafficRuntime(workerSources);
 
     if (this.shouldRestoreIdleWorkerAutoscaling(runs)) {
       void this.runCoordinator.reconcileWorkerAutoscaling('snapshot-idle');
@@ -130,6 +133,7 @@ export class ControlPlaneService {
       runs,
       services,
       workerNodes,
+      workerTrafficRuntime,
       userRuntime,
       fixtures,
       leases: currentLeases,
@@ -278,6 +282,30 @@ export class ControlPlaneService {
       this.runState.dispatchHolds.size === 0 &&
       this.workerController.enabled
     );
+  }
+
+  private buildWorkerTrafficRuntime(workerSources: WorkerSource[]): WorkerTrafficRuntime {
+    if (workerSources.length === 0) {
+      return {
+        webSocketMode: 'unknown',
+        webSocketTargets: 0,
+        workerSources: 0
+      };
+    }
+
+    const modes = new Set(
+      workerSources.map((source) => source.runtime.webSocketMode ?? 'unknown')
+    );
+
+    const [firstMode] = modes;
+    return {
+      webSocketMode: modes.size === 1 ? firstMode ?? 'unknown' : 'mixed',
+      webSocketTargets: Math.max(
+        0,
+        ...workerSources.map((source) => source.runtime.webSocketTargets ?? 0)
+      ),
+      workerSources: workerSources.length
+    };
   }
 
   private clamp(value: number, min: number, max: number): number {

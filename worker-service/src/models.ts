@@ -170,4 +170,6 @@ export interface WorkerRuntimeSnapshot {
   avgP95LatencyMs: number;
   liveRequests: number;
   liveFailures: number;
+  webSocketMode: 'domain' | 'direct';
+  webSocketTargets: number;
 }

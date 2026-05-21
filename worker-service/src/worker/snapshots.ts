@@ -7,6 +7,7 @@ import type {
 import { emptyObjectiveMix } from './action-profile.js';
 import { USER_SNAPSHOT_LIMIT } from './runtime.js';
 import type { VirtualUserState, WorkerAssignmentRuntime } from './runtime.js';
+import { parseDirectWebSocketUrls } from '../staging/realtime/support.js';
 
 export function buildObjectiveMix(users: VirtualUserState[]): ObjectiveMix {
   return users.reduce(
@@ -21,6 +22,7 @@ export function buildObjectiveMix(users: VirtualUserState[]): ObjectiveMix {
 }
 
 export function buildWorkerRuntimeSnapshot(assignments: WorkerAssignmentRuntime[]): WorkerRuntimeSnapshot {
+  const directWebSocketTargets = parseDirectWebSocketUrls().length;
   const runningAssignments = assignments.filter((assignment) => assignment.status === 'running');
   const activeAssignments = runningAssignments.length;
   const runningUsers = runningAssignments.reduce((sum, assignment) => sum + assignment.activeUsers, 0);
@@ -61,7 +63,9 @@ export function buildWorkerRuntimeSnapshot(assignments: WorkerAssignmentRuntime[
     uploadsPerMinute,
     avgP95LatencyMs,
     liveRequests,
-    liveFailures
+    liveFailures,
+    webSocketMode: directWebSocketTargets > 0 ? 'direct' : 'domain',
+    webSocketTargets: directWebSocketTargets
   };
 }
 

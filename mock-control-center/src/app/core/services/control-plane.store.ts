@@ -74,6 +74,13 @@ export class ControlPlaneStore {
   });
   readonly services = computed<ServiceScaling[]>(() => this.snapshot()?.services ?? []);
   readonly workerNodes = computed<WorkerNode[]>(() => this.snapshot()?.workerNodes ?? []);
+  readonly workerTrafficRuntime = computed(() =>
+    this.snapshot()?.workerTrafficRuntime ?? {
+      webSocketMode: 'unknown' as const,
+      webSocketTargets: 0,
+      workerSources: 0
+    }
+  );
   readonly userRuntime = computed<MockUserRuntime | null>(() => this.snapshot()?.userRuntime ?? null);
   readonly fixtures = computed<FixtureProfile[]>(() => this.snapshot()?.fixtures ?? []);
   readonly leases = computed<LeaseRecord[]>(() => this.snapshot()?.leases ?? []);

@@ -1,23 +1,40 @@
 <section class="page-shell">
-  <article class="hero panel">
+  <article class="runs-toolbar panel">
     <div>
       <span class="eyebrow">Runs</span>
-      <h2>Compose one realistic user population and launch it on staging</h2>
-      <p class="muted">
-        The run builder stays focused on one generic user engine. The number of virtual users stays fully operator-defined,
-        and the planner derives shards, dedicated staging identities and target worker replicas from that input.
-      </p>
+      <h2>Staging traffic runs</h2>
+      <p class="muted">Real HTTP traffic targets <code>https://staging.uconnect.cc</code>. WebSocket routing is read from the live worker runtime.</p>
     </div>
 
-    <div class="button-row">
+    <div class="toolbar-stats">
+      <div>
+        <strong>{{ store.activeRuns().length }}</strong>
+        <span>active runs</span>
+      </div>
+      <div>
+        <strong>{{ planner().maxVirtualUsers | number: '1.0-0' }}</strong>
+        <span>VU ceiling</span>
+      </div>
+      <div>
+        <strong>{{ store.workerTrafficRuntime().webSocketMode }}</strong>
+        <span>
+          WS route
+          <ng-container *ngIf="store.workerTrafficRuntime().webSocketTargets > 0">
+            · {{ store.workerTrafficRuntime().webSocketTargets }} targets
+          </ng-container>
+        </span>
+      </div>
+    </div>
+
+    <div class="button-row preset-row">
       <button class="btn btn-secondary" type="button" (click)="applyPreset('balanced')">Balanced</button>
-      <button class="btn btn-secondary" type="button" (click)="applyPreset('conversation')">Conversation wave</button>
-      <button class="btn btn-secondary" type="button" (click)="applyPreset('attachments')">Attachment burst</button>
-      <button class="btn btn-secondary" type="button" (click)="applyPreset('verticalMedia')">Vertical media</button>
-      <button class="btn btn-secondary" type="button" (click)="applyPreset('demoMedia150')">Demo media 150</button>
-      <button class="btn btn-secondary" type="button" (click)="applyPreset('demoGroup150')">Demo group 150</button>
+      <button class="btn btn-secondary" type="button" (click)="applyPreset('conversation')">Conversation</button>
+      <button class="btn btn-secondary" type="button" (click)="applyPreset('attachments')">Attachments</button>
+      <button class="btn btn-secondary" type="button" (click)="applyPreset('verticalMedia')">VPA media</button>
+      <button class="btn btn-secondary" type="button" (click)="applyPreset('demoMedia150')">Media 150</button>
+      <button class="btn btn-secondary" type="button" (click)="applyPreset('demoGroup150')">Group 150</button>
       <button class="btn btn-secondary" type="button" (click)="applyPreset('groupOff')">Group off</button>
-      <button class="btn btn-secondary" type="button" (click)="applyPreset('validation10k')">10k WebSockets</button>
+      <button class="btn btn-secondary" type="button" (click)="applyPreset('validation10k')">10k sockets</button>
     </div>
   </article>
 
@@ -25,25 +42,20 @@
     <form class="panel builder" [formGroup]="form" (ngSubmit)="submit()">
       <div class="panel-header">
         <div>
-          <span class="eyebrow">Run builder</span>
+          <span class="eyebrow">Builder</span>
           <h3>Launch configuration</h3>
         </div>
         <span class="badge badge--info">staging</span>
       </div>
 
       <div class="form-grid">
-        <label class="field">
+        <label class="field field--wide">
           <span>Run name</span>
           <input type="text" formControlName="runName" />
         </label>
         <label class="field">
-          <span>Environment</span>
-          <input type="text" formControlName="environment" readonly />
-        </label>
-        <label class="field">
           <span>Virtual users</span>
           <input type="number" formControlName="virtualUsers" min="1" [max]="planner().maxVirtualUsers" />
-          <small class="muted">Choose any volume up to the current ceiling of {{ planner().maxVirtualUsers }} users.</small>
         </label>
         <label class="field">
           <span>Duration (s)</span>
@@ -52,20 +64,17 @@
         <label class="field">
           <span>Ramp-up (s)</span>
           <input type="number" formControlName="rampUpSeconds" min="0" />
-          <small class="muted">
-            With <code>Gradual online</code> off, this only warms the worker plane. Users themselves are not staggered.
-          </small>
         </label>
         <label class="field">
-          <span>Average session (s)</span>
+          <span>Session avg (s)</span>
           <input type="number" formControlName="avgSessionDurationSeconds" min="30" />
         </label>
         <label class="field">
-          <span>Think time min (ms)</span>
+          <span>Think min (ms)</span>
           <input type="number" formControlName="thinkTimeMinMs" min="0" />
         </label>
         <label class="field">
-          <span>Think time max (ms)</span>
+          <span>Think max (ms)</span>
           <input type="number" formControlName="thinkTimeMaxMs" min="0" />
         </label>
         <label class="field field--checkbox">
@@ -73,47 +82,49 @@
           <span>Gradual online</span>
         </label>
         <label class="field" *ngIf="gradualOnlineEnabled()">
-          <span>Online proportion at start</span>
+          <span>Initial online ratio</span>
           <input type="number" formControlName="initialOnlineRatio" min="0" max="1" step="0.01" />
-          <small class="muted">Use this only if you want a fraction of users to start online before the rest join.</small>
-        </label>
-        <label class="field" *ngIf="!gradualOnlineEnabled()">
-          <span>Online start mode</span>
-          <input type="text" value="All users start online" readonly />
-          <small class="muted">
-            All virtual users enter the active loop immediately, keep their session active for the full run, and initialize a realtime websocket session on staging.
-          </small>
         </label>
       </div>
 
       <div class="subsection" [formGroup]="form.controls.weights">
         <div class="subsection-header">
           <span class="eyebrow">Behavior weights</span>
-          <strong>One generic user engine</strong>
+          <strong>{{ totalWeight() }} total weight · {{ dominantFocus() }}</strong>
         </div>
         <div class="weight-grid">
           <label class="field"><span>Browse</span><input type="number" formControlName="browse" min="0" max="100" /></label>
-          <label class="field"><span>Private messages</span><input type="number" formControlName="privateMessage" min="0" max="100" /></label>
-          <label class="field"><span>Group activity</span><input type="number" formControlName="group" min="0" max="100" /></label>
+          <label class="field"><span>Private msg</span><input type="number" formControlName="privateMessage" min="0" max="100" /></label>
+          <label class="field"><span>Group</span><input type="number" formControlName="group" min="0" max="100" /></label>
           <label class="field"><span>Media</span><input type="number" formControlName="media" min="0" max="100" /></label>
-          <label class="field"><span>Social / friends</span><input type="number" formControlName="social" min="0" max="100" /></label>
-          <label class="field"><span>Notification checks</span><input type="number" formControlName="notificationCheck" min="0" max="100" /></label>
+          <label class="field"><span>Social</span><input type="number" formControlName="social" min="0" max="100" /></label>
+          <label class="field"><span>Notifications</span><input type="number" formControlName="notificationCheck" min="0" max="100" /></label>
         </div>
       </div>
 
-      <div class="subsection subsection-split">
-        <div [formGroup]="form.controls.media">
-          <div class="subsection-header">
-            <span class="eyebrow">Media</span>
-            <strong>Attachment pressure</strong>
-          </div>
-          <div class="weight-grid">
-            <label class="field"><span>Upload probability</span><input type="number" formControlName="uploadProbability" min="0" max="1" step="0.01" /></label>
-            <p class="muted">
-              Upload probability increases the frequency of real media preparation and upload flows against
-              <code>staging.uconnect.cc</code>.
-            </p>
-          </div>
+      <div class="subsection" [formGroup]="form.controls.media">
+        <div class="subsection-header">
+          <span class="eyebrow">Media</span>
+          <strong>Upload frequency</strong>
+        </div>
+        <label class="field">
+          <span>Upload probability</span>
+          <input type="number" formControlName="uploadProbability" min="0" max="1" step="0.01" />
+        </label>
+      </div>
+
+      <div class="launch-plan">
+        <div>
+          <strong>{{ plannedRun().targetWorkerReplicas }}</strong>
+          <span>target workers</span>
+        </div>
+        <div>
+          <strong>{{ plannedRun().workerShards }}</strong>
+          <span>worker shards</span>
+        </div>
+        <div>
+          <strong>{{ plannedRun().leasedIdentities | number: '1.0-0' }}</strong>
+          <span>leased identities</span>
         </div>
       </div>
 
@@ -126,63 +137,127 @@
     </form>
 
     <div class="stack">
-      <article class="panel preview">
+      <article class="panel run-detail" *ngIf="selectedRun() as run">
         <div class="panel-header">
           <div>
-            <span class="eyebrow">Preview</span>
-            <h3>{{ preview().runName }}</h3>
+            <span class="eyebrow">Selected run</span>
+            <h3>{{ run.runName }}</h3>
           </div>
-          <span class="badge badge--info">{{ dominantFocus() }}</span>
+          <span
+            class="badge"
+            [class.badge--success]="run.status === 'running' || run.status === 'completed'"
+            [class.badge--warning]="run.status === 'starting' || run.status === 'paused' || run.status === 'stopping'"
+            [class.badge--danger]="run.status === 'failed'"
+          >
+            {{ run.status }}
+          </span>
         </div>
 
-        <div class="metric-grid">
+        <div class="progress-track">
+          <div class="progress-fill" [style.width.%]="runProgress(run)"></div>
+        </div>
+
+        <div class="live-grid">
           <article class="metric-card">
-            <span class="metric-label">Users</span>
-            <div class="metric-value">{{ plannedRun().requestedUsers }}</div>
+            <span class="metric-label">Active users</span>
+            <div class="metric-value">{{ run.activeUsers | number: '1.0-0' }}</div>
+            <span class="metric-sub">{{ activeUserPercent(run) }}% of {{ run.virtualUsers | number: '1.0-0' }}</span>
           </article>
           <article class="metric-card">
-            <span class="metric-label">Dedicated identities</span>
-            <div class="metric-value">{{ plannedRun().leasedIdentities }}</div>
+            <span class="metric-label">Open sockets</span>
+            <div class="metric-value">{{ run.openSockets | number: '1.0-0' }}</div>
+            <span class="metric-sub">{{ connectedUserPercent(run) }}% connected · {{ openSocketPercent(run) }}% socket</span>
           </article>
           <article class="metric-card">
-            <span class="metric-label">Worker shards</span>
-            <div class="metric-value">{{ plannedRun().workerShards }}</div>
+            <span class="metric-label">HTTP throughput</span>
+            <div class="metric-value">{{ run.requestsPerSecond | number: '1.0-1' }}</div>
+            <span class="metric-sub">requests / second</span>
           </article>
           <article class="metric-card">
-            <span class="metric-label">Target workers</span>
-            <div class="metric-value">{{ plannedRun().targetWorkerReplicas }}</div>
+            <span class="metric-label">Messages</span>
+            <div class="metric-value">{{ run.messagesPerSecond | number: '1.0-1' }}</div>
+            <span class="metric-sub">messages / second</span>
           </article>
           <article class="metric-card">
-            <span class="metric-label">Realtime-capable users</span>
-            <div class="metric-value">{{ preview().virtualUsers | number: '1.0-0' }}</div>
+            <span class="metric-label">Uploads</span>
+            <div class="metric-value">{{ run.uploadsPerMinute | number: '1.0-1' }}</div>
+            <span class="metric-sub">files / minute</span>
           </article>
           <article class="metric-card">
-            <span class="metric-label">Weight sum</span>
-            <div class="metric-value">{{ totalWeight() }}</div>
+            <span class="metric-label">Latency p95</span>
+            <div class="metric-value">{{ run.p95LatencyMs | number: '1.0-0' }}ms</div>
+            <span class="metric-sub">{{ errorRatePercent(run) | number: '1.0-2' }}% errors</span>
           </article>
         </div>
 
-        <div class="detail-grid">
-          <div><strong>{{ plannedRun().usersPerShard }}</strong><span>users / shard</span></div>
-          <div><strong>{{ plannedRun().identitiesPerShard }}</strong><span>identities / shard</span></div>
-          <div><strong>{{ planner().workerShardSize }}</strong><span>planner shard size</span></div>
-          <div><strong>{{ planner().maxVirtualUsers }}</strong><span>current ceiling</span></div>
+        <div class="run-facts">
+          <span>{{ run.elapsedSeconds | number: '1.0-0' }}s elapsed</span>
+          <span>{{ runProgress(run) }}% complete</span>
+          <span>{{ run.targetWorkerReplicas }} workers</span>
+          <span>{{ run.workerShards }} shards</span>
+          <span>{{ run.leasedIdentities | number: '1.0-0' }} identities</span>
         </div>
+
+        <div class="button-row" *ngIf="isControllableRun(run)">
+          <button class="btn btn-secondary" type="button" *ngIf="run.status === 'running'" (click)="pause(run.id)" [disabled]="store.isRunPending(run.id)">Pause</button>
+          <button class="btn btn-secondary" type="button" *ngIf="run.status === 'paused'" (click)="resume(run.id)" [disabled]="store.isRunPending(run.id)">Resume</button>
+          <button class="btn btn-danger" type="button" (click)="stop(run.id)" [disabled]="store.isRunPending(run.id)">Stop</button>
+        </div>
+
+        <section class="subsection">
+          <div class="subsection-header">
+            <span class="eyebrow">Action mix</span>
+            <strong>{{ observedActionTotal(run) | number: '1.0-0' }} observed actions</strong>
+          </div>
+
+          <div class="action-mix">
+            <article class="action-row" *ngFor="let row of observedBehaviorRows(run)">
+              <div class="action-head">
+                <strong>{{ row.label }}</strong>
+                <span>{{ row.count | number: '1.0-0' }}</span>
+              </div>
+              <div class="action-bars">
+                <span class="configured" [style.width.%]="row.configuredPercent"></span>
+                <span class="observed" [style.width.%]="row.actualPercent"></span>
+              </div>
+              <small class="muted">weight {{ row.configuredPercent }}% · observed {{ row.actualPercent }}%</small>
+            </article>
+          </div>
+        </section>
+
+        <section class="event-list" *ngIf="visibleEvents(run).length > 0">
+          <div class="subsection-header">
+            <span class="eyebrow">Latest events</span>
+          </div>
+          <article class="event-row" *ngFor="let event of visibleEvents(run)">
+            <div class="event-topline">
+              <strong>{{ event.title }}</strong>
+              <small class="muted">{{ event.timestamp | date: 'HH:mm:ss' }}</small>
+            </div>
+            <p class="muted">{{ event.detail }}</p>
+          </article>
+        </section>
       </article>
 
       <article class="panel run-list">
         <div class="panel-header">
           <div>
             <span class="eyebrow">Recent runs</span>
-            <h3>Live and recent history</h3>
+            <h3>History</h3>
           </div>
         </div>
 
-        <div class="run-card" *ngFor="let run of store.runHistory()" (click)="selectRun(run.id)">
+        <button
+          class="run-card"
+          type="button"
+          *ngFor="let run of store.runHistory()"
+          [class.run-card--selected]="isSelectedRun(run)"
+          (click)="selectRun(run.id)"
+        >
           <div class="run-card-topline">
             <div>
               <strong>{{ run.runName }}</strong>
-              <small class="muted">{{ run.virtualUsers }} users</small>
+              <small class="muted">{{ run.virtualUsers | number: '1.0-0' }} VU · {{ runProgress(run) }}%</small>
             </div>
             <span
               class="badge"
@@ -195,86 +270,16 @@
           </div>
 
           <div class="progress-track">
-            <div class="progress-fill" [style.width.%]="run.progressPercent"></div>
+            <div class="progress-fill" [style.width.%]="runProgress(run)"></div>
           </div>
 
           <div class="run-card-metrics">
-            <span>{{ run.activeUsers }} active</span>
-            <span>{{ run.requestsPerSecond }} req/s</span>
-            <span>{{ run.messagesPerSecond }} msg/s</span>
+            <span>{{ run.openSockets | number: '1.0-0' }} sockets</span>
+            <span>{{ run.requestsPerSecond | number: '1.0-1' }} req/s</span>
+            <span>{{ run.messagesPerSecond | number: '1.0-1' }} msg/s</span>
+            <span>{{ run.p95LatencyMs | number: '1.0-0' }}ms p95</span>
           </div>
-
-          <div class="run-card-metrics">
-            <span>{{ run.workerShards }} shards</span>
-            <span>{{ run.leasedIdentities }} dedicated identities</span>
-            <span>{{ run.targetWorkerReplicas }} workers</span>
-          </div>
-
-          <div class="button-row">
-            <button class="btn btn-secondary" type="button" *ngIf="run.status === 'running'" (click)="pause(run.id); $event.stopPropagation()" [disabled]="store.isRunPending(run.id)">Pause</button>
-            <button class="btn btn-secondary" type="button" *ngIf="run.status === 'paused'" (click)="resume(run.id); $event.stopPropagation()" [disabled]="store.isRunPending(run.id)">Resume</button>
-            <button class="btn btn-danger" type="button" *ngIf="run.status === 'starting' || run.status === 'running' || run.status === 'paused'" (click)="stop(run.id); $event.stopPropagation()" [disabled]="store.isRunPending(run.id)">Stop</button>
-          </div>
-        </div>
-      </article>
-
-      <article class="panel run-detail" *ngIf="selectedRun() as run">
-        <div class="panel-header">
-          <div>
-            <span class="eyebrow">Selected run</span>
-            <h3>{{ run.runName }}</h3>
-          </div>
-          <span class="badge badge--info">{{ run.environment }}</span>
-        </div>
-
-        <div class="detail-grid">
-          <div><strong>{{ run.virtualUsers }}</strong><span>virtual users</span></div>
-          <div><strong>{{ run.leasedIdentities }}</strong><span>dedicated identities</span></div>
-          <div><strong>{{ run.workerShards }}</strong><span>worker shards</span></div>
-          <div><strong>{{ run.targetWorkerReplicas }}</strong><span>target workers</span></div>
-          <div><strong>{{ run.connectedUsers }}</strong><span>connected users</span></div>
-          <div><strong>{{ run.openSockets }}</strong><span>open sockets</span></div>
-          <div><strong>{{ run.uploadsPerMinute }}</strong><span>uploads / min</span></div>
-          <div><strong>{{ run.p95LatencyMs }} ms</strong><span>p95 latency</span></div>
-        </div>
-
-        <div class="subsection">
-          <div class="subsection-header">
-            <span class="eyebrow">Behavior audit</span>
-            <strong>Configured vs observed action mix</strong>
-          </div>
-
-          <div class="detail-grid">
-            <div><strong>{{ run.objectiveMix.share_file }}</strong><span>share-file objective users</span></div>
-            <div><strong>{{ run.actionCounters.prepare_upload }}</strong><span>prepare upload actions</span></div>
-            <div><strong>{{ run.actionCounters.upload_file }}</strong><span>upload file actions</span></div>
-            <div><strong>{{ run.actionCounters.send_private_message }}</strong><span>private messages sent</span></div>
-            <div><strong>{{ run.actionCounters.send_group_message }}</strong><span>group messages sent</span></div>
-            <div><strong>{{ run.actionCounters.fetch_friends }}</strong><span>friend refresh actions</span></div>
-          </div>
-
-          <div class="event-list">
-            <article class="event-row" *ngFor="let row of observedBehaviorRows(run)">
-              <div class="event-topline">
-                <strong>{{ row.label }}</strong>
-                <small class="muted">{{ row.count }} actions</small>
-              </div>
-              <p class="muted">
-                configured {{ row.configuredPercent }}% · observed {{ row.actualPercent }}%
-              </p>
-            </article>
-          </div>
-        </div>
-
-        <div class="event-list">
-          <article class="event-row" *ngFor="let event of run.events">
-            <div class="event-topline">
-              <strong>{{ event.title }}</strong>
-              <small class="muted">{{ event.timestamp }}</small>
-            </div>
-            <p class="muted">{{ event.detail }}</p>
-          </article>
-        </div>
+        </button>
       </article>
     </div>
   </section>
