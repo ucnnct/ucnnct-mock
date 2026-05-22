@@ -179,7 +179,10 @@ export class WorkerActionExecutor {
           user.currentGroupId = `grp-${this.services.randomInt(1, Math.max(user.knownGroups, 2))}`;
         }
         if (assignment.targetBaseUrl) {
-          user.nextActionAtMs = now + this.services.followUpActionDelayMs(assignment);
+          const waitingForLiveGroup = user.groupCreationRequestedAtMs !== null && !user.currentGroupId;
+          user.nextActionAtMs = now + (waitingForLiveGroup
+            ? this.services.randomInt(2_000, 4_000)
+            : this.services.followUpActionDelayMs(assignment));
         }
         this.services.scheduleLiveTraffic(assignment, user, action);
         return actionOutcome(
@@ -217,7 +220,7 @@ export class WorkerActionExecutor {
           user.currentGroupId = `grp-new-${crypto.randomUUID().slice(0, 5)}`;
         }
         if (assignment.targetBaseUrl) {
-          user.nextActionAtMs = now + this.services.followUpActionDelayMs(assignment);
+          user.nextActionAtMs = now + this.services.randomInt(3_000, 6_000);
         }
         this.services.scheduleLiveTraffic(assignment, user, action);
         return actionOutcome(
