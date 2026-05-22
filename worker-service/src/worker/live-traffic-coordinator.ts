@@ -5,6 +5,8 @@ import { StagingRealtimeDriver } from '../staging/realtime/driver.js';
 import { WorkerBehaviorPlanner } from './behavior-planner.js';
 import type { LiveTrafficScheduleOptions, VirtualUserState, WorkerAssignmentRuntime } from './runtime.js';
 
+const LIVE_GROUP_CREATION_RETRY_MS = 45_000;
+
 export type LiveTrafficAggregate = {
   requests: number;
   failures: number;
@@ -133,15 +135,27 @@ export class WorkerLiveTrafficCoordinator {
     const sessionKey = this.sessionKey(assignmentId, user.id);
     const context = this.stagingApi.getContext(sessionKey);
     const realtimeReady = this.stagingRealtime.isReady(sessionKey);
+    const contextKnownGroups = context.groupIds.length;
+    const hasFreshGroupCreationRequest =
+      user.groupCreationRequestedAtMs !== null &&
+      Date.now() - user.groupCreationRequestedAtMs < LIVE_GROUP_CREATION_RETRY_MS;
     const authenticated =
       user.authenticated ||
       this.stagingApi.hasAuthenticatedSession(sessionKey) ||
       realtimeReady;
     const connectedToWs = realtimeReady;
     const knownFriends = context.friendIds.length;
-    const knownGroups = context.groupIds.length;
+    const knownGroups = contextKnownGroups > 0
+      ? contextKnownGroups
+      : hasFreshGroupCreationRequest
+        ? Math.max(user.knownGroups, 1)
+        : 0;
     const currentConversationId = context.currentPeerId ?? user.currentConversationId;
     const currentGroupId = context.currentGroupId;
+    const groupCreationRequestedAtMs =
+      contextKnownGroups > 0 || !hasFreshGroupCreationRequest
+        ? null
+        : user.groupCreationRequestedAtMs;
     const pendingNotifications = context.pendingNotifications;
     const uploadPrepared = Boolean(context.preparedUploadKey);
 
@@ -152,6 +166,7 @@ export class WorkerLiveTrafficCoordinator {
       knownGroups === user.knownGroups &&
       currentConversationId === user.currentConversationId &&
       currentGroupId === user.currentGroupId &&
+      groupCreationRequestedAtMs === user.groupCreationRequestedAtMs &&
       pendingNotifications === user.pendingNotifications &&
       uploadPrepared === user.uploadPrepared
     ) {
@@ -166,6 +181,7 @@ export class WorkerLiveTrafficCoordinator {
       knownGroups,
       currentConversationId,
       currentGroupId,
+      groupCreationRequestedAtMs,
       pendingNotifications,
       uploadPrepared
     };

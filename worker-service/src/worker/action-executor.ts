@@ -56,6 +56,7 @@ export class WorkerActionExecutor {
         user.currentPage = 'HOME';
         user.currentConversationId = null;
         user.currentGroupId = null;
+        user.groupCreationRequestedAtMs = null;
         user.sessionObjective = this.services.pickObjective(assignment);
         user.sessionStartedAtMs = now;
         user.sessionDeadlineAtMs = assignment.gradualOnline
@@ -208,9 +209,9 @@ export class WorkerActionExecutor {
         user.currentPage = 'GROUP';
         user.currentConversationId = null;
         if (assignment.targetBaseUrl) {
-          // Prevent repeated live group creation while the async API call is still updating session context.
           user.knownGroups = Math.max(user.knownGroups, 1);
-          user.currentGroupId ??= `live-group-pending-${user.id.slice(0, 8)}`;
+          user.currentGroupId = null;
+          user.groupCreationRequestedAtMs = now;
         } else {
           user.knownGroups += 1;
           user.currentGroupId = `grp-new-${crypto.randomUUID().slice(0, 5)}`;
@@ -294,6 +295,7 @@ export class WorkerActionExecutor {
         user.sessionStartedAtMs = null;
         user.sessionDeadlineAtMs = null;
         user.nextActionAtMs = now + this.services.sampleOfflineCooldownMs(assignment, user);
+        user.groupCreationRequestedAtMs = null;
         this.services.forgetLiveSession(assignment.id, user.id);
         return actionOutcome(requestCost, latencyMs, 'Closed the session and entered offline cooldown.');
     }

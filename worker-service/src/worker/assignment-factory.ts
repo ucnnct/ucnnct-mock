@@ -101,7 +101,8 @@ function buildUsers(
       uploadedFiles: 0,
       activationOffsetMs,
       initialWaveOnline,
-      sessionRuns: 0
+      sessionRuns: 0,
+      groupCreationRequestedAtMs: null
     };
   });
 }

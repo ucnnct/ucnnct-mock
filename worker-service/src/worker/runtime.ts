@@ -29,6 +29,7 @@ export type VirtualUserState = Omit<
   lastActionAtMs: number;
   initialWaveOnline: boolean;
   sessionRuns: number;
+  groupCreationRequestedAtMs: number | null;
 };
 
 export type WorkerAssignmentRuntime = WorkerAssignmentInput & {
