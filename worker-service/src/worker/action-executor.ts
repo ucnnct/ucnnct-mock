@@ -207,7 +207,11 @@ export class WorkerActionExecutor {
       case 'create_group':
         user.currentPage = 'GROUP';
         user.currentConversationId = null;
-        if (!assignment.targetBaseUrl) {
+        if (assignment.targetBaseUrl) {
+          // Prevent repeated live group creation while the async API call is still updating session context.
+          user.knownGroups = Math.max(user.knownGroups, 1);
+          user.currentGroupId ??= `live-group-pending-${user.id.slice(0, 8)}`;
+        } else {
           user.knownGroups += 1;
           user.currentGroupId = `grp-new-${crypto.randomUUID().slice(0, 5)}`;
         }
