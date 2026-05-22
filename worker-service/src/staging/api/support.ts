@@ -32,6 +32,20 @@ export function pickPeer(input: StagingApiInput): AssignedMockUserIdentity | nul
   return input.peerCandidates[index] ?? null;
 }
 
+export function pickPeers(input: StagingApiInput, count: number): AssignedMockUserIdentity[] {
+  if (count <= 0 || input.peerCandidates.length === 0) {
+    return [];
+  }
+
+  const candidates = [...input.peerCandidates];
+  for (let index = candidates.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [candidates[index], candidates[swapIndex]] = [candidates[swapIndex]!, candidates[index]!];
+  }
+
+  return candidates.slice(0, count);
+}
+
 export function createStagingApiSession(sessionKey: string): StagingApiSessionState {
   return {
     inflight: false,

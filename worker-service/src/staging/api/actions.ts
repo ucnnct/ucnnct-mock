@@ -4,6 +4,7 @@ import {
   messageText,
   noopApiOutcome,
   pickPeer,
+  pickPeers,
   shortId
 } from './support.js';
 import { StagingApiHttpClient } from './http-client.js';
@@ -17,6 +18,11 @@ import type {
   StagingApiSessionState,
   UserProfile
 } from './types.js';
+
+const GROUP_BOOTSTRAP_MEMBER_COUNT = Math.max(
+  0,
+  Math.min(12, Number(process.env.STAGING_GROUP_BOOTSTRAP_MEMBERS ?? 4))
+);
 
 export class StagingApiActionHandlers {
   constructor(private readonly api: StagingApiHttpClient) {}
@@ -152,7 +158,9 @@ export class StagingApiActionHandlers {
     });
     session.currentGroupId = response.body.id;
     session.groupIds = [...new Set([...session.groupIds, response.body.id])];
-    return combineApiResponses([response]);
+
+    const memberResponses = await this.addRandomMembers(input, session, response.body.id, GROUP_BOOTSTRAP_MEMBER_COUNT);
+    return combineApiResponses([response, ...memberResponses]);
   }
 
   private async handleAddMember(input: StagingApiInput, session: StagingApiSessionState): Promise<ApiOutcome> {
@@ -293,5 +301,35 @@ export class StagingApiActionHandlers {
     session.groupIds = groups.body.map((group) => group.id);
     session.currentGroupId = session.groupIds[0] ?? null;
     return session.currentGroupId;
+  }
+
+  private async addRandomMembers(
+    input: StagingApiInput,
+    session: StagingApiSessionState,
+    groupId: string,
+    count: number
+  ): Promise<Array<{ status: number }>> {
+    const peers = pickPeers(input, count);
+    const responses: Array<{ status: number }> = [];
+
+    for (const peer of peers) {
+      responses.push(
+        await this.api.json(
+          input.baseUrl,
+          session,
+          `/api/groups/${encodeURIComponent(groupId)}/members`,
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              userId: peer.id,
+              role: 'MEMBER'
+            })
+          },
+          { treatStatusesAsSuccess: [409] }
+        )
+      );
+    }
+
+    return responses;
   }
 }

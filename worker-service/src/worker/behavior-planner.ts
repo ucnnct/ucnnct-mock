@@ -148,7 +148,14 @@ export class WorkerBehaviorPlanner {
           }
           return 'create_group';
         }
-        return user.currentGroupId && Math.random() < 0.78 ? 'send_group_message' : 'open_group_conversation';
+        if (user.currentGroupId) {
+          const roll = Math.random();
+          if (roll < 0.1) {
+            return 'add_member';
+          }
+          return roll < 0.84 ? 'send_group_message' : 'open_group_conversation';
+        }
+        return 'open_group_conversation';
       case 'media':
         if (user.uploadPrepared) {
           return 'upload_file';
