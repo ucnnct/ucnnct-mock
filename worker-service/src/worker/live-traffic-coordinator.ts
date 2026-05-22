@@ -5,7 +5,7 @@ import { StagingRealtimeDriver } from '../staging/realtime/driver.js';
 import { WorkerBehaviorPlanner } from './behavior-planner.js';
 import type { LiveTrafficScheduleOptions, VirtualUserState, WorkerAssignmentRuntime } from './runtime.js';
 
-const LIVE_GROUP_CREATION_RETRY_MS = 45_000;
+const LIVE_GROUP_CREATION_RETRY_MS = 5 * 60_000;
 
 export type LiveTrafficAggregate = {
   requests: number;
