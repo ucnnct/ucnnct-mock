@@ -256,7 +256,15 @@ export class KubernetesWorkerController {
     let latestTargets: WorkerPodTarget[] = [];
 
     while (Date.now() < deadline) {
-      latestTargets = (await this.listWorkerPods()).filter((target) => target.ready);
+      try {
+        latestTargets = (await this.listWorkerPods()).filter((target) => target.ready);
+      } catch (error) {
+        console.warn(
+          '[control-plane] unable to list ready worker pods:',
+          error instanceof Error ? error.message : error
+        );
+      }
+
       if (latestTargets.length >= minReadyPods) {
         return latestTargets;
       }

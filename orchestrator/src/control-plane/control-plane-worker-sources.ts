@@ -18,7 +18,11 @@ export async function listWorkerTargets(
     return [syntheticWorkerTarget(workerOrigin)];
   }
 
-  const pods = await workerController.listWorkerPods();
+  const pods = await listWorkerPodsSafely(workerController);
+  if (!pods) {
+    return [];
+  }
+
   const targets = (preferReady ? pods.filter((pod) => pod.ready) : pods).map((pod) => ({
     ...pod,
     kind: 'pod' as const
@@ -89,6 +93,20 @@ export async function buildWorkerNodes(
   }
 
   return buildWorkerNodesFromSources(workerSources, metricsByNode, clamp);
+}
+
+async function listWorkerPodsSafely(
+  workerController: KubernetesWorkerController
+): Promise<Awaited<ReturnType<KubernetesWorkerController['listWorkerPods']>> | null> {
+  try {
+    return await workerController.listWorkerPods();
+  } catch (error) {
+    console.warn(
+      '[control-plane] unable to list worker pods:',
+      error instanceof Error ? error.message : error
+    );
+    return null;
+  }
 }
 
 function syntheticWorkerTarget(workerOrigin: string): WorkerTarget {
