@@ -158,6 +158,10 @@ export class ControlPlaneRunCoordinator {
       return;
     }
 
+    if (await this.hasActiveRunLease()) {
+      return;
+    }
+
     const workerSources = await loadWorkerSources(this.workerController, this.workerOrigin);
     const hasLiveAssignments = workerSources.some((source) =>
       source.assignments.some(
@@ -176,6 +180,14 @@ export class ControlPlaneRunCoordinator {
         error instanceof Error ? error.message : error
       );
     }
+  }
+
+  private async hasActiveRunLease(): Promise<boolean> {
+    const leases = await safeJson<LeaseRecord[]>(
+      `${this.mockUserOrigin}/api/v1/mock-users/leases`,
+      []
+    );
+    return leases.some((lease) => lease.state === 'active');
   }
 
   aggregateRunSummary(runId: string, assignments: WorkerAssignmentRef[], leases: LeaseRecord[]): RunSummary {
