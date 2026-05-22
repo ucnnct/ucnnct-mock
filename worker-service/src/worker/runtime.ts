@@ -30,6 +30,7 @@ export type VirtualUserState = Omit<
   initialWaveOnline: boolean;
   sessionRuns: number;
   groupCreationRequestedAtMs: number | null;
+  groupCreationNotBeforeMs: number | null;
 };
 
 export type WorkerAssignmentRuntime = WorkerAssignmentInput & {

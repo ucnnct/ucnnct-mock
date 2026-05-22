@@ -57,6 +57,9 @@ export class WorkerActionExecutor {
         user.currentConversationId = null;
         user.currentGroupId = null;
         user.groupCreationRequestedAtMs = null;
+        user.groupCreationNotBeforeMs = liveAssignment
+          ? now + this.services.randomInt(15_000, 120_000)
+          : null;
         user.sessionObjective = this.services.pickObjective(assignment);
         user.sessionStartedAtMs = now;
         user.sessionDeadlineAtMs = assignment.gradualOnline
@@ -299,6 +302,7 @@ export class WorkerActionExecutor {
         user.sessionDeadlineAtMs = null;
         user.nextActionAtMs = now + this.services.sampleOfflineCooldownMs(assignment, user);
         user.groupCreationRequestedAtMs = null;
+        user.groupCreationNotBeforeMs = null;
         this.services.forgetLiveSession(assignment.id, user.id);
         return actionOutcome(requestCost, latencyMs, 'Closed the session and entered offline cooldown.');
     }

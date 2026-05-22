@@ -22,6 +22,7 @@ export function finishWorkerAssignment(
     sessionDeadlineAtMs: null,
     uploadPrepared: false,
     groupCreationRequestedAtMs: null,
+    groupCreationNotBeforeMs: null,
     nextActionAtMs: now + 60_000
   }));
   users.forEach((user) => forgetLiveSession(user.id));

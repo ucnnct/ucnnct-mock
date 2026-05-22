@@ -49,7 +49,7 @@ export class WorkerBehaviorPlanner {
 
     user.sessionObjective = objectiveForBehavior(behavior);
     return {
-      action: this.pickActionForBehavior(behavior, user, assignment),
+      action: this.pickActionForBehavior(behavior, user, assignment, now),
       behavior
     };
   }
@@ -114,7 +114,8 @@ export class WorkerBehaviorPlanner {
   private pickActionForBehavior(
     behavior: BehaviorCategory,
     user: VirtualUserState,
-    assignment: WorkerAssignmentRuntime
+    assignment: WorkerAssignmentRuntime,
+    now: number
   ): UserAction {
     switch (behavior) {
       case 'browse':
@@ -138,6 +139,13 @@ export class WorkerBehaviorPlanner {
         return user.currentConversationId ? 'send_private_message' : 'open_private_conversation';
       case 'group':
         if (!user.currentGroupId && user.knownGroups === 0) {
+          if (
+            assignment.targetBaseUrl &&
+            user.groupCreationNotBeforeMs !== null &&
+            now < user.groupCreationNotBeforeMs
+          ) {
+            return 'open_home';
+          }
           return 'create_group';
         }
         return user.currentGroupId && Math.random() < 0.78 ? 'send_group_message' : 'open_group_conversation';

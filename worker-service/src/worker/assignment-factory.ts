@@ -102,7 +102,8 @@ function buildUsers(
       activationOffsetMs,
       initialWaveOnline,
       sessionRuns: 0,
-      groupCreationRequestedAtMs: null
+      groupCreationRequestedAtMs: null,
+      groupCreationNotBeforeMs: null
     };
   });
 }
