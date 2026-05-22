@@ -13,8 +13,6 @@ import { ControlPlaneStore } from '../../core/services/control-plane.store';
   styleUrl: './runs-page.component.scss'
 })
 export class RunsPageComponent {
-  private static readonly HIGH_VOLUME_SOCKET_THRESHOLD = 5_000;
-
   private readonly fb = inject(FormBuilder);
   protected readonly store = inject(ControlPlaneStore);
   protected readonly selectedRunId = signal<string | null>(null);
@@ -207,16 +205,16 @@ export class RunsPageComponent {
 
     if (preset === 'validation10k') {
       this.form.patchValue({
-        runName: 'staging-10k-websocket-hold',
+        runName: 'staging-10k-weighted-realistic',
         virtualUsers: 10_000,
         durationSeconds: 1800,
         rampUpSeconds: 600,
-        thinkTimeMinMs: 30000,
-        thinkTimeMaxMs: 60000,
+        thinkTimeMinMs: 5000,
+        thinkTimeMaxMs: 15000,
         gradualOnline: false,
         avgSessionDurationSeconds: 7200,
-        weights: { browse: 0, privateMessage: 0, group: 0, media: 0, social: 0, notificationCheck: 0 },
-        media: { uploadProbability: 0 }
+        weights: { browse: 12, privateMessage: 32, group: 28, media: 8, social: 10, notificationCheck: 10 },
+        media: { uploadProbability: 0.02 }
       });
       return;
     }
@@ -300,7 +298,6 @@ export class RunsPageComponent {
   }
 
   protected async submit(): Promise<void> {
-    this.normalizeHighVolumeSocketRun();
     const created = await this.store.startRun(this.preview());
     if (created) {
       this.selectedRunId.set(created.id);
@@ -329,45 +326,6 @@ export class RunsPageComponent {
 
   private isSocketHoldProfile(): boolean {
     return this.totalWeight() === 0 && this.preview().media.uploadProbability === 0;
-  }
-
-  private normalizeHighVolumeSocketRun(): void {
-    const value = this.form.getRawValue();
-    if (value.virtualUsers < RunsPageComponent.HIGH_VOLUME_SOCKET_THRESHOLD) {
-      return;
-    }
-
-    const totalWeight =
-      value.weights.browse +
-      value.weights.privateMessage +
-      value.weights.group +
-      value.weights.media +
-      value.weights.social +
-      value.weights.notificationCheck;
-
-    const alreadySocketHold =
-      totalWeight === 0 &&
-      value.media.uploadProbability === 0 &&
-      value.rampUpSeconds >= 300 &&
-      value.thinkTimeMinMs >= 10000 &&
-      value.thinkTimeMaxMs >= 10000 &&
-      value.avgSessionDurationSeconds >= value.durationSeconds;
-
-    if (alreadySocketHold) {
-      return;
-    }
-
-    this.form.patchValue({
-      runName: value.virtualUsers >= 10_000 ? 'staging-10k-websocket-hold' : `staging-${value.virtualUsers}-websocket-hold`,
-      durationSeconds: Math.max(value.durationSeconds, 1800),
-      rampUpSeconds: Math.max(value.rampUpSeconds, 600),
-      thinkTimeMinMs: 30000,
-      thinkTimeMaxMs: 60000,
-      gradualOnline: false,
-      avgSessionDurationSeconds: 7200,
-      weights: { browse: 0, privateMessage: 0, group: 0, media: 0, social: 0, notificationCheck: 0 },
-      media: { uploadProbability: 0 }
-    });
   }
 
   protected observedBehaviorRows(run: RunSummary): Array<{
